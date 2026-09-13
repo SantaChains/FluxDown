@@ -11,7 +11,7 @@
 
 - **核心价值主张**: Rust 驱动的高速多协议下载，永久免费，零广告，零追踪（仅两条匿名部署遥测，可关），本地优先，无需账号即可全功能使用。
 - **平台矩阵（已发布）**: Windows / macOS / Linux 桌面 App、Android App、headless Web 服务器（Docker/群晖/QNAP/OpenWrt/Unraid/CasaOS）、CLI（`fluxdown`）、浏览器扩展、用户脚本。iOS 代码存在但无发布 job。
-- **可选云能力（FluxCloud）**: 登录账号后跨设备**配置同步**（客户端已落地，见 `clients.md`「Flutter 前端架构」）；下载本身永远本地，账号非必需。
+- **纯本地**: 无账号体系与云同步（FluxCloud 客户端层已整体移除，daemon/agent 均为纯本地边界）；下载与配置全部本地存储。
 
 ---
 
@@ -22,7 +22,7 @@
 | `README.md`（本文件） | 架构全图、顶层目录树 |
 | `engine.md` | 状态与数据模型、DB 表与字段语义、6 协议、引擎子系统、插件系统、受管组件 |
 | `hosts-and-api.md` | HTTP API 路由组与鉴权、hub / cli / nmh / updater、headless server env 与路由 |
-| `clients.md` | Flutter 前端（主题 / 云同步 / widgets / 移动端 / 设置项分类）、扩展、用户脚本、Web SPA、官网 |
+| `clients.md` | Flutter 前端（主题 / widgets / 移动端 / 设置项分类）、扩展、用户脚本、Web SPA、官网 |
 | `ops.md` | 日志系统、发布与 CI、设计文档实现状态 |
 | `extension-points.md` | 「要加 X 改哪里」全表 |
 
@@ -77,17 +77,15 @@ flowchart TB
     wasm[GPUI WASM Web]
     third[CLI / 第三方客户端]
   end
-  agent[fluxdown-agent<br/>账户/同步/设备/UI Gateway]
+  agent[fluxdown-agent<br/>本地 UI Gateway]
   daemon[fluxdownd<br/>纯下载管理核心]
   protocol[fluxdown_protocol<br/>传输无关 wire / 版本握手]
-  cloud[FluxCloud]
   engine[fluxdown_engine]
   gpui --> agent
   wasm --> agent
   third --> agent
   third -. 纯下载客户端可直连 .-> daemon
   agent -->|JSON-RPC| daemon
-  agent --> cloud
   daemon --> engine
   protocol -. shared contract .-> agent
   protocol -. shared contract .-> daemon
@@ -95,7 +93,7 @@ flowchart TB
 ```
 
 - `native/daemon` 是 aria2c 式纯下载核心目标：下载任务、下载设置、RSS、插件和下载事件归它；账户与云同步永不进入该边界。
-- `native/agent` 是可选但常驻的官方客户端后端：独占 FluxCloud Token、配置同步、设备协同和远程任务状态机；官方 UI 默认只连接 agent。
+- `native/agent` 是官方客户端常驻本地代理：仅承载本地 UI Gateway，不含账户、云同步或设备协同；官方 UI 默认只连接 agent。
 - `native/protocol` 是 daemon、agent、GPUI/WASM/CLI 共享的 wire 层；目前已落地服务角色与版本握手，JSON-RPC 方法/事件随实际迁移补充，禁止提前建立第二套 DTO。
 - 当前生产路径仍是 `hub` / `server`；迁移完成前不得把目标图误报为已运行。`native/server` 只保留旧 headless 路径，不接收新架构功能。
 
@@ -112,7 +110,7 @@ FluxDown/
 │   ├── widgets/        桌面 UI 组件族（见 `clients.md`「Flutter 前端架构」）
 │   ├── mobile/         移动端 UI（Android 已发布；简化：无窗口/托盘/NMH）
 │   ├── popup/          第二 Flutter 引擎（快速下载独立小窗，--quick-popup）
-│   ├── services/       服务层（含 cloud/ 云同步子系统、win32_toast/）
+│   ├── services/       服务层（win32_toast/ 等）
 │   ├── theme/          双层 token 系统（颜色 + 度量，schema v2）
 │   └── i18n/           翻译（Weblate 管理，assets/i18n/*.json 为源）
 ├── crates/             GPUI PC 客户端迁移层（同一 Rust workspace，见 `clients.md`「GPUI PC 客户端」）
@@ -126,7 +124,7 @@ FluxDown/
 │   ├── api/            `fluxdown_api`：ApiHost 契约 + HTTP 面（零 rinf）——见 `hosts-and-api.md`「HTTP API」
 │   ├── protocol/       `fluxdown_protocol`：daemon / agent / 客户端共享的传输无关协议基线
 │   ├── daemon/         `fluxdown_daemon`：纯下载常驻核心边界（运行链路迁移中）
-│   ├── agent/          `fluxdown_agent`：云功能与官方 UI Gateway 边界（运行链路迁移中）
+│   ├── agent/          `fluxdown_agent`：官方客户端本地 UI Gateway 边界（运行链路迁移中）
 │   ├── server/         `fluxdown_server`：headless Web 服务器——见 `hosts-and-api.md`「Headless 服务器」
 │   ├── hub/            rinf FFI 适配层（唯一碰 rinf）——见 `hosts-and-api.md`「宿主与客户端 crate」
 │   ├── cli/            `fluxdown_cli`：二进制 `fluxdown`——见 `hosts-and-api.md`「宿主与客户端 crate」

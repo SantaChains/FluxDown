@@ -22,10 +22,10 @@
 
 **状态管理**：ChangeNotifier + ListenableBuilder（无 Provider/Riverpod/Bloc），`_safeNotifyListeners()` 防已释放。Provider 统一模式：订阅 rinf 信号 + 单向 `sendSignalToRust` 写（`SettingsProvider`/`PluginProvider`/`ComponentController`/`download_controller`/…）。
 
-**两套配置平面**：引擎 config（`SettingsProvider`，~80 键，经 rinf → `db.rs config` 表）vs Dart-only 客户端偏好（主题、云 token/设备 ID、analytics、update——存 `KvStore`）。
+**两套配置平面**：引擎 config（`SettingsProvider`，~80 键，经 rinf → `db.rs config` 表）vs Dart-only 客户端偏好（主题、analytics、update——存 `KvStore`）。
 
 ### 存储：`services/kv_store.dart`
-SharedPreferences 门面，**便携模式**（`portable` 标记）写 `<exe>/portable_data/settings.json`（400ms 防抖），安装模式透传。init() 全量入内存缓存，`runApp` 前必须 await。是 theme/cloud/analytics/update/device 的存储层。
+SharedPreferences 门面，**便携模式**（`portable` 标记）写 `<exe>/portable_data/settings.json`（400ms 防抖），安装模式透传。init() 全量入内存缓存，`runApp` 前必须 await。是 theme/analytics/update 的存储层。
 
 ### 主题：双层 token 系统（schema v2）
 - `flux_theme_tokens.dart`：Layer0 **颜色** token（~30 字段 + 嵌套 metric），5 内置预设工厂（defaultDark/Light、midnightBlue、nord、warmLight），JSON per-field 回退，`FluxThemeScope` InheritedWidget 下发。
@@ -34,8 +34,8 @@ SharedPreferences 门面，**便携模式**（`portable` 标记）写 `<exe>/por
 - `theme_provider.dart`：5 内置 × 5 accent（blue/green/violet/rose/custom）+ 导入自定义主题（`imported_themes_v2`）+ uiScale；`activeTokens` 优先级 导入主题 > 内置+accent。
 - `segment_palette.dart`：黄金角生成最多 256 个对比安全的 per-thread 颜色。
 
-### 云同步：`services/cloud/`（**已落地并接线**，contract v1，见 `ops.md`「设计文档实现状态」）
-`config_sync_service.dart`（SSE 驱动实时配置同步，状态机 + 退避 + 防回声）、`cloud_client.dart`（REST + 401 自动刷新，base 由 `--dart-define FLUXCLOUD_BASE_URL`）、`cloud_auth_service.dart`（账号会话，登录即启用云）、`sync_catalog.dart`（per-key 读写绑定，**显式排除**设备本地键：路径/端口/token/代理/behavior）、`cloud_models.dart`、`device_identity.dart`（持久 deviceId/name/platform）、`nickname_pool.dart`。仅同步引擎配置的**跨设备通用**子集；下载数据不同步。
+### 云同步（已移除）
+`lib/src/services/cloud/` 全套（config_sync/cloud_auth/cloud_client/sync_catalog/cloud_models/device_identity/nickname_pool）及配套对话框（add_device/incoming_pairing）与测试已随云层整体删除；App 不再有账户/云同步/设备协同能力，daemon/agent 均为纯本地边界。
 
 ### 快速下载小窗：`popup/`（第二 Flutter 引擎）
 原生宿主以 `--quick-popup` 拉起 `runQuickPopupApp()`，**零插件注册 + 不初始化 Rust**，经 MethodChannel `fluxdown/popup_child` 与主引擎通信（主引擎侧 `services/popup_window_service.dart`）。payload（主题 tokens/语言/队列/目录/URL）JSON 注入；复用 `quick_download_form`/`manifest_select_view` 与同一 token→ShadTheme 管线。清单预解析命中时原窗切 ManifestSelectView。
@@ -55,7 +55,7 @@ SharedPreferences 门面，**便携模式**（`portable` 标记）写 `<exe>/por
 `mobile_app`（`Platform.isAndroid||isIOS` 路由入口）、`mobile_shell`（任务/设置双屏 + 悬浮 Dock）、`mobile_ui`、`screens/`、`pages/`、`sheets/`、`services/`（share_intent、mobile_storage）。无窗口/托盘/autostart/NMH；保留 HLS/BT/variant 全局弹窗。复用 models/i18n/theme/bindings。
 
 ### 设置项（单一事实源 = `models/settings_provider.dart` load switch + `db.rs config` 表）
-~80 键，分类：**下载**（default_save_dir/segments、auto_max_connections、domain_conn_caps、max_concurrent_tasks、speed_limit_bytes、max_auto_retries、auto_retry_delay_secs、auto_resume_on_start、remember/last_save_dir、default_queue_id、global_user_agent、cdn_multi_enabled、cdn_max_nodes［0=自动］、cdn_resolver_endpoints/cdn_ecs_subnets/cdn_hints_base［云端下发，Dart 云拉取落库］、cdn_node_health/cdn_pending_reports/auto_route_health［引擎学习/遥测缓存，UI 不读写］）、**App/系统**（close_to_tray、start_minimized_to_tray、auto_startup、auto_check_update、update_channel、analytics_enabled、notify_on_complete、silent_download_enabled、silent_skip_selection［免打扰子开关：跳过 BT/HLS/变体二次选择；设备本地，不入云同步目录］、use_server_time、keep_awake_while_downloading、log_max_size_mb、reveal_file_cmd）、**悬浮球/剪贴板**、**侧栏/标题栏可见性**、**自定义分类**、**代理**、**BT**（含 tracker 订阅键）、**ED2K**（server_list/订阅/kad/upnp/…
+~80 键，分类：**下载**（default_save_dir/segments、auto_max_connections、domain_conn_caps、max_concurrent_tasks、speed_limit_bytes、max_auto_retries、auto_retry_delay_secs、auto_resume_on_start、remember/last_save_dir、default_queue_id、global_user_agent、cdn_multi_enabled、cdn_max_nodes［0=自动］、cdn_resolver_endpoints/cdn_ecs_subnets/cdn_hints_base、cdn_node_health/cdn_pending_reports/auto_route_health［引擎学习/遥测缓存，UI 不读写］）、**App/系统**（close_to_tray、start_minimized_to_tray、auto_startup、auto_check_update、update_channel、analytics_enabled、notify_on_complete、silent_download_enabled、silent_skip_selection［免打扰子开关：跳过 BT/HLS/变体二次选择；设备本地］、use_server_time、keep_awake_while_downloading、log_max_size_mb、reveal_file_cmd）、**悬浮球/剪贴板**、**侧栏/标题栏可见性**、**自定义分类**、**代理**、**BT**（含 tracker 订阅键）、**ED2K**（server_list/订阅/kad/upnp/…
 
 ---
 
@@ -74,7 +74,7 @@ SharedPreferences 门面，**便携模式**（`portable` 标记）写 `<exe>/por
 
 ## Web SPA（`web/`）
 
-React 19 + Vite 8 + TanStack（Router/Query/Table/Virtual/Form）+ Tailwind v4 + Radix + bun + oxlint + react-compiler。`bun run build` → `web/dist`，由 `fluxdown_server` **编译期内嵌**进二进制托管（SPA fallback→index.html；`FLUXDOWN_WEBROOT` 可覆盖成磁盘目录，见 hosts-and-api.md）——改了前端要重编服务器才生效。路由：`/login`、`/`（TasksScreen）、`/settings`（token 门禁，401→清凭据→/login）。`src/lib`：`api.ts`（typed REST）、`ws.ts`（可重连 WS live store）、`cloud/`（L2 云同步 client）、`i18n`、`task-group`、`manifest-selection`、`view-prefs`、`theme`、`format`。
+React 19 + Vite 8 + TanStack（Router/Query/Table/Virtual/Form）+ Tailwind v4 + Radix + bun + oxlint + react-compiler。`bun run build` → `web/dist`，由 `fluxdown_server` **编译期内嵌**进二进制托管（SPA fallback→index.html；`FLUXDOWN_WEBROOT` 可覆盖成磁盘目录，见 hosts-and-api.md）——改了前端要重编服务器才生效。路由：`/login`、`/`（TasksScreen）、`/settings`（token 门禁，401→清凭据→/login）。`src/lib`：`api.ts`（typed REST）、`ws.ts`（可重连 WS live store）、`cloud/`（FluxCloud 客户端**残留**：Dart 侧已删、Rust agent 已纯本地化，此目录待清理）、`i18n`、`task-group`、`manifest-selection`、`view-prefs`、`theme`、`format`。
 
 **双端信息架构对齐（硬约束）**：同一功能在 web 与桌面 App 的**归属位置必须一致，基准 = 桌面**——设置项跟随桌面 `settings_page.dart` 的分类（web 设置分区组件与桌面侧边栏分类一一对应：GeneralSettings↔通用、DownloadSettings↔下载、ProxySettings↔代理…），对话框字段的分区/排序跟随桌面对应对话框。给双端并行开发（含 subagent 派发）写任务时，**归属分类/排序必须写成一份共享契约**（明确"桌面 X 分类 + web 对应分区组件"），禁止两份各自措辞留给执行者解读。交付前自查：桌面截图里该功能在哪个菜单，web 就必须在哪个菜单。
 

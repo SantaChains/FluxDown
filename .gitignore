@@ -125,6 +125,3 @@ assets/screenshot/
 .worktrees/
 website-v2/
 .tmp*
-
-# Local AI memory
-.workbuddy/

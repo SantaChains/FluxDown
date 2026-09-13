@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/logo/fluxdown_logo.png" alt="FluxDown Logo" width="128" />
+<img src="logo/fluxdown.png" alt="FluxDown Logo" width="128" />
 
 # FluxDown
 
@@ -210,6 +210,25 @@ cargo test -p hub                    # FFI adapter tests
 ```
 
 </details>
+
+## Roadmap
+
+Priorities distilled from the gap analysis and technical frontier studies — full reasoning in [readme.roadmap.md](readme.roadmap.md) · [gap analysis](readme.gap.md) · [frontier notes](readme.frontier.md):
+
+| Priority | Item | Status |
+|---|---|---|
+| **P0** | Persist per-host concurrency profiles (survive restarts) | Planned |
+| **P0** | Split the 11k-line `download_manager.rs` into focused modules | Planned |
+| **P1** | Metalink (RFC 5854/6249) multi-mirror aggregation | Parser landed in the engine; source aggregation next |
+| **P1** | HTTP end-to-end checksum verification + bad-block repair | Planned |
+| **P1** | BBR congestion control (Linux via `SO_TCP_CONGESTION`) | Probing landed; Windows pending |
+| **P1** | Global speed scheduler + live bottleneck visualization (source / network / disk) | Planned |
+| **P1** | Self-hosted offline-download companion (aria2 + yt-dlp on your own server) | Planned |
+| **P1** | LAN P2P cache sharing (builds on device pairing; BT swarm stats already in engine) | Planned |
+| **P2** | SFTP / WebDAV / FTPS · Tor routing · cross-protocol resume | Planned |
+| **P3** | QUIC/HTTP3 (after rustls migration) · IPFS · MPTCP | Deferred |
+
+> The hard ceiling: software can only *approach* the ISP / NIC / disk / CPU limits — segmentation removes per-connection throttling, BBR removes bufferbloat. Details in [readme.roadmap.md](readme.roadmap.md) §2.
 
 ## Contributing & Community
 

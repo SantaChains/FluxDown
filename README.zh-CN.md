@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/logo/fluxdown_logo.png" alt="FluxDown Logo" width="128" />
+<img src="logo/fluxdown.png" alt="FluxDown Logo" width="128" />
 
 # FluxDown
 
@@ -211,9 +211,28 @@ cargo test -p hub                    # FFI 适配层测试
 
 </details>
 
+## 路线图
+
+优先级提炼自差距分析与技术前沿研究——完整推理见 [readme.roadmap.md](readme.roadmap.md) · [差距分析](readme.gap.md) · [前沿笔记](readme.frontier.md)：
+
+| 优先级 | 事项 | 状态 |
+|---|---|---|
+| **P0** | per-host 并发画像持久化（重启不归零） | 待做 |
+| **P0** | 拆分 1.1 万行的 `download_manager.rs` 为职责模块 | 待做 |
+| **P1** | Metalink（RFC 5854/6249）多镜像聚合 | 解析已落地引擎；多源拼合待做 |
+| **P1** | HTTP 端到端 checksum 校验 + 坏块修复 | 待做 |
+| **P1** | BBR 拥塞控制（Linux 经 `SO_TCP_CONGESTION`） | 探测已落地；Windows 待内核支持 |
+| **P1** | 全局限速调度器 + 实时瓶颈可视化（源/网络/磁盘三段） | 待做 |
+| **P1** | 自建离线下载 companion（自有服务器跑 aria2 + yt-dlp） | 待做 |
+| **P1** | LAN P2P 缓存共享（基于设备配对；BT swarm 统计已在引擎落地） | 待做 |
+| **P2** | SFTP / WebDAV / FTPS · Tor 路由 · 跨协议续传 | 待做 |
+| **P3** | QUIC/HTTP3（rustls 迁移后）· IPFS · MPTCP | 暂缓 |
+
+> 硬天花板：软件只能*逼近* ISP / 网卡 / 磁盘 / CPU 上限——分段解除单连接限速，BBR 解除缓冲膨胀。详见 [readme.roadmap.md](readme.roadmap.md) §2。
+
 ## 参与贡献与社区
 
-- **Bug 反馈 / 功能建议** —— [GitHub Issues](https://github.com/zerx-lab/FluxDown/issues) 或应用内反馈对话框
+- **Bug 反馈 / 功能建议** —— [GitHub Issues](https://github.com/SantaChains/FluxDown/issues) 或应用内反馈对话框
 - **QQ 群** —— [832143651](https://fluxdown.zerx.dev/qq-group)
 
 欢迎提交 Pull Request！请从 `main` 拉分支并把 PR 提到 `main` —— `main` 是开发分支，`stable` 只承载稳定版本（由维护者从 `main` 合并前进）。提交前请确保通过：

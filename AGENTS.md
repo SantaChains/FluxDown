@@ -15,7 +15,7 @@
 | 架构全图、顶层目录树（哪个目录管什么） | `.omp/knowledge/README.md` |
 | 状态码 / DB 表与字段语义、6 种协议、引擎子系统（auto_proxy、RSS、segment_coordinator…）、插件系统、受管组件 | `.omp/knowledge/engine.md` |
 | HTTP API 路由组与鉴权、hub / cli / nmh / updater、headless server env 与扩展路由 | `.omp/knowledge/hosts-and-api.md` |
-| Flutter 与 GPUI 前端（主题 token、云同步、widgets 族、移动端、GPUI 迁移层）、扩展、用户脚本、Web SPA、官网 | `.omp/knowledge/clients.md` |
+| Flutter 与 GPUI 前端（主题 token、widgets 族、移动端、GPUI 迁移层）、扩展、用户脚本、Web SPA、官网 | `.omp/knowledge/clients.md` |
 | 日志系统细节、发布流水线矩阵、设计文档实现状态（已实现 vs 仅设计，含命名歧义澄清） | `.omp/knowledge/ops.md` |
 | **「要加 X 改哪里」全表 —— 动手前先查这张** | `.omp/knowledge/extension-points.md` |
 
@@ -115,7 +115,7 @@ git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z   # 触发发布流水�
 | `ApiHost` | `native/api/src/service.rs` | 客户端→引擎（HTTP 契约） | REST/aria2/MCP 的能力面；必需方法 + 可默认降级方法 |
 
 - 当前两个生产宿主仍是 `hub`（App，actor=`download_actor.rs`）与 `server`（headless，actor=`actor.rs`）；`fluxdown_api` 只依赖 `&dyn ApiHost`，同一套 HTTP 面服务任意宿主。CLI 双模式：默认 HTTP 连宿主，`add --local` 内嵌引擎。
-- **迁移目标**：`native/daemon` 成为可独立运行的纯下载核心，`native/agent` 常驻承载账户/云同步/设备协同与官方 UI Gateway；两者共享 `native/protocol` 的 JSON-RPC 语义。`native/server` 进入废弃路径，任何新实现不得依赖它。
+- **迁移目标**：`native/daemon` 成为可独立运行的纯下载核心，`native/agent` 常驻承载官方客户端本地 UI Gateway（**纯本地**：不含账户/云同步/设备协同）；两者共享 `native/protocol` 的 JSON-RPC 语义。`native/server` 进入废弃路径，任何新实现不得依赖它。
 - **并发模型**：current_thread tokio actor 串行化写；每个下载 spawn 独立 task + CancellationToken；插件 resolve 永不阻塞 actor（off-actor spawn + 通道回流）。
 - 客户端捕获三条并行前端进同一本机 RPC（`:17800/download`）：扩展、用户脚本、桌面确认框。
 
@@ -130,7 +130,7 @@ git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z   # 触发发布流水�
 - `crates/{i18n,theme,components,shell,downloads,settings,app}`：GPUI PC 迁移层；`crates/app` 的包名是 `fluxdown_ui_app`。新增页面与 capability 的 crate 边界、目录归属、依赖方向见 `rule://gpui-crate-architecture`；禁止把业务页面回堆进 shell。
 - `fluxdown_protocol`：传输无关的本机 wire 层；只能依赖序列化/纯类型能力，不依赖引擎、运行时、数据库、HTTP 或 UI。
 - `fluxdown_daemon`：aria2c 式纯下载核心边界；拥有下载任务与下载设置，不负责账户、云同步或 UI，且不得依赖 `native/server`、`native/agent` 或 `crates/*`。
-- `fluxdown_agent`：官方客户端的账户/云同步/设备协同与 UI Gateway；不得直接执行下载或依赖 `fluxdown_engine`，只经协议调用 daemon。完整边界见 `rule://local-service-architecture`。
+- `fluxdown_agent`：官方客户端本地 UI Gateway（纯本地，不含账户/云同步/设备协同）；不得直接执行下载或依赖 `fluxdown_engine`，只经协议调用 daemon。完整边界见 `rule://local-service-architecture`。
 - **feature 门控**：`plugins`、`components`（默认关；desktop/server 开，mobile/CLI 关）。**关插件时下载主链路零行为变化**（注入 no-op `PluginManager`）。
 
 **编译期陷阱**

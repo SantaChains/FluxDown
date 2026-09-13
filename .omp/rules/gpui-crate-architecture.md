@@ -26,7 +26,7 @@ shell + capability crates + host adapters -> app
 - `crates/shell`：窗口 chrome、标题栏、活动栏、侧栏、内容槽位、路由和窗口级状态；不得实现下载、设置、RSS 等业务页面，不得依赖具体 capability crate。
 - capability crate（如 `downloads`、`settings`）：拥有该能力的页面、领域组件、视图状态、动作和宿主接口；一个能力可包含多个页面，不得一页一 crate。
 - `crates/app`：唯一 composition root；初始化 GPUI、资产、主题、i18n、宿主连接，创建各 feature Entity 并注入 shell。只有 app 可以知道全部 capability。
-- 官方 GPUI/WASM UI 默认只连接 `fluxdown-agent`；页面只依赖能力端口与 `fluxdown_protocol` wire，不直接依赖 `fluxdown_engine`、`fluxdown_daemon`、FluxCloud SDK 或具体 HTTP/WS/IPC 实现。完整服务边界见 `rule://local-service-architecture`。
+- 官方 GPUI/WASM UI 默认只连接 `fluxdown-agent`；页面只依赖能力端口与 `fluxdown_protocol` wire，不直接依赖 `fluxdown_engine`、`fluxdown_daemon` 或具体 HTTP/WS/IPC 实现。完整服务边界见 `rule://local-service-architecture`。
 
 ## capability 内部结构
 
@@ -52,7 +52,7 @@ src/
 
 - capability 之间默认不得直接依赖；跨能力协调由 app 完成，或通过最小宿主接口/事件契约。
 - 设置 UI 不得依赖下载 UI；它通过设置端口读写配置。
-- capability 的命令由 app 注入统一 agent client；禁止 downloads/settings 页面各自创建连接、持有 Token、重连或维护 daemon/cloud 状态机。
+- capability 的命令由 app 注入统一 agent client；禁止 downloads/settings 页面各自创建连接、持有凭据、重连或维护 daemon 状态机。
 - 禁止新建 `core`、`common`、`shared`、`utils`、`services` 等无明确所有权的垃圾场 crate。
 - 不为假想插件化提前引入复杂 trait、宏或服务定位器。先用明确的 `RouteId`、导航元数据和 Entity 内容槽位；出现多个真实注册方后再稳定抽象。
 - 资源、文案、状态和组件归属其最窄业务边界；窗口级资源归 app/shell，业务资源归对应 capability。

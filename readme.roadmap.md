@@ -14,7 +14,7 @@
 | **智能代理（三路测速+故障转移+系统代理探测）** | ✅ **已实现且先进** | `auto_proxy.rs`（直连 vs 代理采样对比、热切换胜出者） |
 | BT 分片 SHA1 校验 | ✅ 已实现 | `bt_downloader.rs::verify_pieces_core` |
 | 分段 AIMD / 无锁限速 / 专业写盘 | ✅ 已实现 | `segment_coordinator.rs` / `speed_limiter.rs` |
-| QUIC/HTTP3、metalink、SFTP/WebDAV、HTTP 端到端 checksum | ❌ 未实现 | 见 §1 |
+| QUIC/HTTP3、SFTP/WebDAV、HTTP 端到端 checksum | ❌ 未实现；metalink 解析已落地（v1，多镜像聚合未完成） | 见 §1 |
 
 > 结论前置：本项目**代理能力已是卖点而非短板**，差距集中在"协议补完""跨源协同""端到端校验"三处。
 
@@ -28,7 +28,7 @@
 |---|---|---|---|
 | **HTTP/3 (QUIC)** | ❌ 未实现 [已核实] | 弱网/移动无 HOL 阻塞 + 连接迁移 | 高（需 rustls 迁移） |
 | **SFTP / FTPS / WebDAV** | ❌ 未实现 [已核实：无 `sftp/ssh/webdav/ftps` 命中] | 企业/NAS/私有云场景 | 中（依赖 `ssh2`/`dav` crate） |
-| **metalink 多镜像聚合** | ❌ 未实现 [已核实：无 `metalink/multi_source` 下载源聚合] | 多源并发 + 自动校验（aria2 强项） | 中 |
+| **metalink 多镜像聚合** | ⚠️ 解析已落地（`native/engine/src/metalink.rs` v1，RFC 5854/6249）；多源并发拼合未实现 | 多源并发 + 自动校验（aria2 强项） | 中（解析已完成，剩调度） |
 | **MPTCP（多路径 TCP）** | ❌ 未实现 [推断] | Wi-Fi+蜂窝bonding 韧性 | 中（内核/平台依赖） |
 | **WebTransport / WebSocket 下载** | ❌ 未实现 [推断] | 新型 CDN 流、抗封锁 | 中 |
 | **Tor / 匿名网络下载** | ❌ 未实现 [推断] | 审查规避、隐私 | 低-中（SOCKS 已具备，加路由即可） |
@@ -147,18 +147,18 @@ BDP = 带宽 × RTT
 
 ### 3.1 协议补完（确定性收益）
 - **[P1] HTTP 层 checksum 校验 + 坏块修复**：给定 hash 时端到端验证，损坏块从同文件备用镜像/跨协议重取。低成本高信任增益。
-- **[P1] metalink / 多镜像聚合**：引入 metalink 解析 + 多源拼合，直接追平 aria2 的核心差异点。
+- **[P1] metalink / 多镜像聚合**：解析已落地（`metalink.rs` v1）；剩余多源并发拼合与 hash 校验接线，直接追平 aria2 的核心差异点。
 - **[P2] SFTP / WebDAV / FTPS**：面向企业/NAS/私有云，依赖 `ssh2`/`dav` crate。
 - **[P3] IPFS / WebTorrent**：去中心化分发，生态未成熟，谨慎。
 
 ### 3.2 智能加速（已在前两文档展开）
 - **[P0] per-host 并发画像持久化**（重启不归零）。
 - **[P1] 自建离线下载 companion**（aria2 + yt-dlp + 自有服务器）。
-- **[P1] LAN P2P 缓存共享**：基于已有 `local_pairing`，扩展为局域网块级复用 → 家庭/办公室多设备秒传同名文件。
+- **[P1] LAN P2P 缓存共享**：基于已有 `local_pairing`，扩展为局域网块级复用 → 家庭/办公室多设备秒传同名文件（BT swarm 统计 `p2p_stats.rs` 已落地，UI 待补）。
 - **[P2] 跨协议聚合**：同一 hash 的 HTTP↔BT 互备续传。
 
 ### 3.3 网络层
-- **[P1] 启用 BBR**（OS 级或经 QUIC 顺带）。
+- **[P1] 启用 BBR**（OS 级或经 QUIC 顺带）。**已部分落地**：`transport_tuning.rs` 探测 + Linux `SO_TCP_CONGESTION=bbr`；Windows 待内核支持或替代方案。
 - **[P3] QUIC/HTTP3**（TLS 后端迁移后）。
 - **[前瞻] MPTCP / WebTransport**。
 

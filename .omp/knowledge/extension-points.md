@@ -21,7 +21,7 @@
 | **新增 Doctor 诊断项** | `hub/src/diagnostics.rs` 加探针 fn（返回 `DiagnosticCheck`，wire `id` 稳定、`level` 取 `ok`/`warn`/`error`/`info`、`hint` 取既有 code）→ 接进 `probe_sync()` 或 `run()` 的顺序里 → Dart `translations.dart` 的 `S.doctorCheckLabel` 加一臂 + `assets/i18n/{en,zh}.json` 加 `doctorCheckXxx`（新 hint 再加 `doctorHintXxx`）；要能就地修复则在 `doctor_report_view.dart` 的 `_actionFor` 加一臂 + `doctorActionXxx` 文案。**信号无需改动**：`DiagnosticCheck` 是通用行，加检查项不动 wire schema、不用 `rinf gen`。诊断与修复动作走 `download_actor` 里的独立 Doctor 泵（不碰 Engine、不进主 `select!`） |
 | **新增 webhook 事件** | `engine/src/webhook.rs` 的 `WebhookEventKind` 加变体（`wire()`/`title()` 同步）+ 在 `download_manager` 对应生命周期点位 `self.webhook.emit(...)`；UI 侧事件芯片自动跟随 `WebhookEvents.all`（Dart）/ `WEBHOOK_EVENTS`（TS），**三处 wire 名必须逐字一致** |
 | **新增 webhook 服务预设** | 只改 `engine/src/webhook.rs`：`Preset` 加变体 + `wire`/`label`/`content_type`/`escape`/`default_template`/`url_placeholder` 六个 match 各补一臂。模板由引擎下发，UI 零改动（只有品牌字标 `WebhookPresetMark`/`PRESET_MARKS` 想美化时才加） |
-| **新增引擎设置** | `settings_provider.dart` 加字段+setter(`_saveToRust`)+load switch case；要跨设备同步则 `sync_catalog.dart` 加 `SyncEntry`（否则默认设备本地） |
+| **新增引擎设置** | `settings_provider.dart` 加字段+setter(`_saveToRust`)+load switch case（云同步目录已移除，设置均为设备本地） |
 | **新增 Flutter 主题预设/度量** | `flux_theme_tokens.dart` 加 `BuiltinThemeId`+工厂+`builtinThemes` 项 / `flux_metric_tokens.dart` 加 clamped 字段 + `app_metrics.dart` 暴露 |
 | **新增 GPUI 主题/基础组件** | `crates/theme` 改完整亮暗 `SemanticThemeTokens`（Base 新 token 必须同步两份）→ `crates/components` 只从 `active_theme().tokens()` 取值；文案仍只改共享 `assets/i18n/{en,zh}.json`，`crates/i18n/build.rs` 自动嵌入 |
 | **新增 NAS/分发目标** | `packaging/<target>/build_*.sh` 复用（**单个** server 二进制 + `FLUXDOWN_*`；Web UI 已编译期内嵌，别再往包里塞 `web/` 目录）布局 → 接入 release.yml `build-server-nas-packages` |
