@@ -83,6 +83,10 @@ pub async fn run_add_local(args: AddArgs, json: bool) -> Result<(), ClientError>
         .manager
         .take_done_rx()
         .ok_or_else(|| ClientError::new("engine done channel unavailable", ExitCode::Unknown))?;
+    // off-actor metalink 抓取回流：不接线则 metalink 任务永不启动（卡在等待）。
+    let mut metalink_rx = engine.manager.take_metalink_rx().ok_or_else(|| {
+        ClientError::new("engine metalink channel unavailable", ExitCode::Unknown)
+    })?;
 
     // 4) 逐 URL 建任务；仅成功者（create_task 返 Some）进入等待集合。
     let mut created_ids: Vec<String> = Vec::with_capacity(urls.len());
@@ -144,6 +148,11 @@ pub async fn run_add_local(args: AddArgs, json: bool) -> Result<(), ClientError>
                 let Some(done) = maybe_done else { break };
                 engine.manager.on_task_done(&done).await; // 内部 drain_queue 推进排队任务
                 remaining.remove(&done.task_id);
+            }
+            maybe_out = metalink_rx.recv() => {
+                // metalink 清单解析完成/失败 → 改写任务后重新入队启动。
+                let Some(out) = maybe_out else { break };
+                engine.manager.on_metalink_ready(out).await;
             }
             _ = tokio::signal::ctrl_c() => {
                 for id in &remaining {

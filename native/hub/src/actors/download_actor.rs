@@ -532,6 +532,11 @@ pub async fn run(db_dir: PathBuf) -> Result<(), ActorError> {
     let missing_cleanup_rx: Option<mpsc::Receiver<Vec<String>>> =
         engine.manager.take_missing_cleanup_rx();
 
+    // off-actor metalink 抓取回流通道：清单解析 worker → `on_metalink_ready`
+    // 再入启动。与 missing_cleanup 同款走后台泵合流 `aux_tx`，不新增主
+    // 循环分支；不接线则该宿主下 metalink 任务永不启动（下载卡死）。
+    let metalink_rx = engine.manager.take_metalink_rx();
+
     // Off-actor plugin resolve 回流通道（见插件系统契约一，关键）：resolver
     // 平面在独立 tokio task 上异步执行，结果经 `resolve_rx` 回流本循环调用
     // `on_resolve_ready`；onError 重试意图经 `plugin_retry_rx` 回流调用
@@ -1014,6 +1019,8 @@ pub async fn run(db_dir: PathBuf) -> Result<(), ActorError> {
         MissingCleanup(Vec<String>),
         /// 右键「复制文件」：把任务落盘的文件/文件夹放进系统剪贴板。
         CopyPath(CopyPathToClipboard),
+        /// off-actor metalink 抓取回流（清单解析完成/失败 → on_metalink_ready）。
+        MetalinkReady(fluxdown_engine::download_manager::MetalinkOutcome),
     }
     let (aux_tx, mut aux_rx) = mpsc::unbounded_channel::<AuxSignal>();
     // 文件丢失自动清理泵：引擎 detached 扫描 → mpsc → aux_tx → 主循环单分支。
@@ -1022,6 +1029,17 @@ pub async fn run(db_dir: PathBuf) -> Result<(), ActorError> {
         tokio::spawn(async move {
             while let Some(ids) = rx.recv().await {
                 if cleanup_tx.send(AuxSignal::MissingCleanup(ids)).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+    // metalink 抓取回流泵：off-actor 清单解析 worker → aux_tx → 主循环单分支。
+    if let Some(mut rx) = metalink_rx {
+        let metalink_tx = aux_tx.clone();
+        tokio::spawn(async move {
+            while let Some(out) = rx.recv().await {
+                if metalink_tx.send(AuxSignal::MetalinkReady(out)).is_err() {
                     break;
                 }
             }
@@ -1252,6 +1270,7 @@ pub async fn run(db_dir: PathBuf) -> Result<(), ActorError> {
                         user_agent: msg.user_agent,
                         queue_id: msg.queue_id,
                         checksum: msg.checksum,
+                        mirror_urls: download_manager::mirror_urls_json(&msg.mirror_urls),
                         ignore_tls_errors: msg.ignore_tls_errors,
                         extra_headers: msg.extra_headers,
                         selected_file_indices: msg.selected_file_indices,
@@ -1301,6 +1320,9 @@ pub async fn run(db_dir: PathBuf) -> Result<(), ActorError> {
                             user_agent: msg.user_agent.clone(),
                             queue_id: msg.queue_id.clone(),
                             checksum: entry.checksum,
+                            mirror_urls: download_manager::mirror_urls_json(
+                                &entry.mirror_urls,
+                            ),
                             ignore_tls_errors: msg.ignore_tls_errors,
                             extra_headers,
                             method: ctx.method,
@@ -1596,6 +1618,9 @@ pub async fn run(db_dir: PathBuf) -> Result<(), ActorError> {
                         Err(e) => (false, false, format!("os:{e}")),
                     };
                     CopyPathToClipboardResult { ok, is_dir, error }.send_signal_to_dart();
+                }
+                AuxSignal::MetalinkReady(out) => {
+                    engine.manager.on_metalink_ready(out).await;
                 }
                 }
             }
@@ -2755,6 +2780,7 @@ async fn handle_api_command(
                     user_agent: req.user_agent,
                     queue_id: req.queue_id,
                     checksum: req.checksum,
+                    mirror_urls: download_manager::mirror_urls_json(&req.mirror_urls),
                     ignore_tls_errors: req.ignore_tls_errors,
                     extra_headers: req.headers.unwrap_or_default(),
                     method: req.method,

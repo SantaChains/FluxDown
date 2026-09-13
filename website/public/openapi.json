@@ -3038,6 +3038,13 @@
             ],
             "description": "浏览器原始 HTTP method（`\"GET\"`/`\"POST\"`/…）。缺省 = GET。\nform-POST 触发的下载必须携带，否则引擎用 GET 重发会拿到错误内容。"
           },
+          "mirrorUrls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "多镜像聚合的其余镜像 URL（不含 `url` 主源；空 = 无镜像）。引擎\n据此构造镜像节点池跨 host 分流；`.metalink`/`.meta4` 直链无需传\n——引擎自动抓取清单回填。"
+          },
           "proxyUrl": {
             "type": "string",
             "description": "单任务代理 URL（空 = 使用全局代理）。"
@@ -4453,7 +4460,7 @@
       },
       "TaskDto": {
         "type": "object",
-        "description": "任务信息（`GET /api/v1/tasks`、`GET /api/v1/tasks/{id}` 响应）。\n\n# Examples\n\n```\nuse fluxdown_api::types::TaskDto;\nuse fluxdown_engine::model::TaskInfo;\n\nlet info = TaskInfo {\n    task_id: \"t1\".to_string(),\n    url: \"https://example.com/f.zip\".to_string(),\n    file_name: \"f.zip\".to_string(),\n    save_dir: \"/tmp\".to_string(),\n    status: 1,\n    downloaded_bytes: 10,\n    total_bytes: 100,\n    error_message: String::new(),\n    created_at: \"1700000000\".to_string(),\n    proxy_url: String::new(),\n    queue_id: String::new(),\n    checksum: String::new(),\n    ignore_tls_errors: false,\n    file_missing: false,\n    completed_at: String::new(),\n    segments: 0,\n    queue_order: 0,\n    uploaded_bytes: 0,\n    uploaded_at_completion: 0,\n    seeding_status: 0,\n    seeding_message: String::new(),\n    seeding_time_secs: 0,\n    seed_ratio_limit_milli: -2,\n    seed_post_ratio_limit_milli: -2,\n    seed_time_limit_minutes: -2,\n    seed_inactive_time_limit_minutes: -2,\n    seed_upload_limit_bps: 0,\n    referrer: String::new(),\n    group_id: String::new(),\n    rss_source_id: String::new(),\n    origin_url: String::new(),\n    auto_route: String::new(),\n};\nlet dto = TaskDto::from(info);\nassert_eq!(dto.task_id, \"t1\");\nlet json = serde_json::to_string(&dto).unwrap();\nassert!(json.contains(\"\\\"taskId\\\":\\\"t1\\\"\"));\n```",
+        "description": "任务信息（`GET /api/v1/tasks`、`GET /api/v1/tasks/{id}` 响应）。\n\n# Examples\n\n```\nuse fluxdown_api::types::TaskDto;\nuse fluxdown_engine::model::TaskInfo;\n\nlet info = TaskInfo {\n    task_id: \"t1\".to_string(),\n    url: \"https://example.com/f.zip\".to_string(),\n    file_name: \"f.zip\".to_string(),\n    save_dir: \"/tmp\".to_string(),\n    status: 1,\n    downloaded_bytes: 10,\n    total_bytes: 100,\n    error_message: String::new(),\n    created_at: \"1700000000\".to_string(),\n    proxy_url: String::new(),\n    queue_id: String::new(),\n    checksum: String::new(),\n    ignore_tls_errors: false,\n    file_missing: false,\n    completed_at: String::new(),\n    segments: 0,\n    queue_order: 0,\n    uploaded_bytes: 0,\n    uploaded_at_completion: 0,\n    seeding_status: 0,\n    seeding_message: String::new(),\n    seeding_time_secs: 0,\n    seed_ratio_limit_milli: -2,\n    seed_post_ratio_limit_milli: -2,\n    seed_time_limit_minutes: -2,\n    seed_inactive_time_limit_minutes: -2,\n    seed_upload_limit_bps: 0,\n    referrer: String::new(),\n    group_id: String::new(),\n    rss_source_id: String::new(),\n    origin_url: String::new(),\n    auto_route: String::new(),\n    mirror_urls: String::new(),\n};\nlet dto = TaskDto::from(info);\nassert_eq!(dto.task_id, \"t1\");\nlet json = serde_json::to_string(&dto).unwrap();\nassert!(json.contains(\"\\\"taskId\\\":\\\"t1\\\"\"));\n```",
         "required": [
           "taskId",
           "url",
@@ -4506,6 +4513,13 @@
           "ignoreTlsErrors": {
             "type": "boolean",
             "description": "是否显式忽略 HTTPS 证书错误。默认 false（严格验证）。"
+          },
+          "mirrorUrls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "多镜像聚合的其余镜像 URL 清单（不含 `url` 主源；空 = 无镜像）。\n来源：metalink 解析 / probe `Link: rel=duplicate` 发现 / 建任务时\n调用方直接携带。"
           },
           "originUrl": {
             "type": "string",

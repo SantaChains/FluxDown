@@ -82,7 +82,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     seed_post_ratio_limit_milli INTEGER NOT NULL DEFAULT -2,
     seed_time_limit_minutes INTEGER NOT NULL DEFAULT -2,
     seed_inactive_time_limit_minutes INTEGER NOT NULL DEFAULT -2,
-    seed_upload_limit_bps INTEGER NOT NULL DEFAULT 0
+    seed_upload_limit_bps INTEGER NOT NULL DEFAULT 0,
+    mirror_urls TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS task_segments (
     task_id TEXT NOT NULL,
@@ -262,7 +263,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     seed_post_ratio_limit_milli INTEGER NOT NULL DEFAULT -2,
     seed_time_limit_minutes INTEGER NOT NULL DEFAULT -2,
     seed_inactive_time_limit_minutes INTEGER NOT NULL DEFAULT -2,
-    seed_upload_limit_bps BIGINT NOT NULL DEFAULT 0
+    seed_upload_limit_bps BIGINT NOT NULL DEFAULT 0,
+    mirror_urls TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS task_segments (
     task_id TEXT NOT NULL,
@@ -456,6 +458,7 @@ fn task_from_row(row: &AnyRow) -> Result<TaskInfo, sqlx::Error> {
             .try_get("seed_inactive_time_limit_minutes")
             .unwrap_or(-2),
         seed_upload_limit_bps: row.try_get("seed_upload_limit_bps").unwrap_or(0),
+        mirror_urls: row.try_get("mirror_urls").unwrap_or_default(),
         referrer: row.try_get("referrer").unwrap_or_default(),
         group_id: row.try_get("group_id").unwrap_or_default(),
         rss_source_id: row.try_get("rss_source_id").unwrap_or_default(),
@@ -464,7 +467,7 @@ fn task_from_row(row: &AnyRow) -> Result<TaskInfo, sqlx::Error> {
     })
 }
 
-const TASK_COLUMNS: &str = "id, url, file_name, save_dir, status, downloaded_bytes, total_bytes, error_message, created_at, proxy_url, queue_id, checksum, ignore_tls_errors, file_missing, completed_at, segments, queue_order, uploaded_bytes, uploaded_at_completion, seeding_status, seeding_message, seeding_time_secs, seed_ratio_limit_milli, seed_post_ratio_limit_milli, seed_time_limit_minutes, seed_inactive_time_limit_minutes, seed_upload_limit_bps, referrer, group_id, rss_source_id, origin_url, auto_route";
+const TASK_COLUMNS: &str = "id, url, file_name, save_dir, status, downloaded_bytes, total_bytes, error_message, created_at, proxy_url, queue_id, checksum, ignore_tls_errors, file_missing, completed_at, segments, queue_order, uploaded_bytes, uploaded_at_completion, seeding_status, seeding_message, seeding_time_secs, seed_ratio_limit_milli, seed_post_ratio_limit_milli, seed_time_limit_minutes, seed_inactive_time_limit_minutes, seed_upload_limit_bps, referrer, group_id, rss_source_id, origin_url, auto_route, mirror_urls";
 
 /// 文件跟踪扫描的最小任务投影（[`Db::load_file_tracking_rows`]）。扫描只需
 /// 要判定「目标路径是否被活跃任务占用」和「已完成任务的产物是否还在盘上」，
@@ -734,6 +737,10 @@ impl Db {
         // 队列级上传限速（KB/s；0 = 不限）。BT add/re-add 时与任务级
         // 覆盖一起折算成 librqbit 上传上限，见 download_manager。
         self.add_column_if_missing("queues", "upload_limit_kbps", "BIGINT NOT NULL DEFAULT 0")
+            .await?;
+        // 多镜像聚合：其余镜像 URL 的 JSON 数组（主 URL 仍在 tasks.url）。
+        // 来源 metalink 解析 / Link 头发现；空 = 无镜像。仅 http(s) 任务。
+        self.add_column_if_missing("tasks", "mirror_urls", "TEXT NOT NULL DEFAULT ''")
             .await?;
         Ok(())
     }
@@ -3583,6 +3590,45 @@ impl Db {
     pub async fn set_task_origin_url(&self, task_id: &str, origin: &str) -> Result<(), DbError> {
         sqlx::query("UPDATE tasks SET origin_url = $1 WHERE id = $2")
             .bind(origin)
+            .bind(task_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// 写入多镜像聚合的镜像 URL 清单（JSON 数组原文；空串 = 清除）。
+    /// 仅 http(s) 任务有意义；主 URL（最高优先镜像）存 `tasks.url`，
+    /// 这里存其余镜像。见 `metalink.rs` 与 `TaskInfo::mirror_urls`。
+    pub async fn set_task_mirror_urls(
+        &self,
+        task_id: &str,
+        mirror_urls_json: &str,
+    ) -> Result<(), DbError> {
+        sqlx::query("UPDATE tasks SET mirror_urls = $1 WHERE id = $2")
+            .bind(mirror_urls_json)
+            .bind(task_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// 改写任务主 URL（metalink 解析后把最高优先镜像回写为 `tasks.url`，
+    /// 原 metalink 直链迁入 `origin_url` 供「复制下载链接」）。仅 metalink
+    /// 抓取链路使用；普通任务的 url 不可变。
+    pub async fn set_task_url(&self, task_id: &str, url: &str) -> Result<(), DbError> {
+        sqlx::query("UPDATE tasks SET url = $1 WHERE id = $2")
+            .bind(url)
+            .bind(task_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// 写入任务 checksum spec（`algo=hexhash`；空 = 跳过校验）。metalink
+    /// 抓取链路在建任务后回填 `<hash>`；普通任务在 insert 时落库。
+    pub async fn set_task_checksum(&self, task_id: &str, checksum: &str) -> Result<(), DbError> {
+        sqlx::query("UPDATE tasks SET checksum = $1 WHERE id = $2")
+            .bind(checksum)
             .bind(task_id)
             .execute(&self.pool)
             .await?;

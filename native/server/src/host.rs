@@ -285,6 +285,7 @@ impl ApiHost for ServerApiHost {
                 user_agent: String::new(),
                 queue_id: String::new(),
                 checksum: String::new(),
+                mirror_urls: Vec::new(),
                 ignore_tls_errors: false,
                 headers: req.headers.clone(),
                 torrent_b64: None,

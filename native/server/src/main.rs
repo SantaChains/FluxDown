@@ -245,6 +245,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .manager
         .take_missing_cleanup_rx()
         .ok_or("take_missing_cleanup_rx returned None (already taken)")?;
+    // metalink 抓取回流：不接线则 metalink 任务永不启动（下载卡死）。
+    let metalink_rx = engine
+        .manager
+        .take_metalink_rx()
+        .ok_or("take_metalink_rx returned None (already taken)")?;
 
     let db_handle = engine.db.clone();
     let selector_handle = engine.selector.clone();
@@ -263,6 +268,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         resolve_rx,
         plugin_retry_rx,
         missing_cleanup_rx,
+        metalink_rx,
     ));
 
     // 本地设备互联（P2P 局域网配对 + mDNS 发现 + 直连传输）。

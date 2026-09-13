@@ -13,7 +13,7 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub enum ServiceRole {
     /// 只管理本地下载能力的常驻核心。
     Daemon,
-    /// 管理账户、云同步并向官方客户端提供统一入口的常驻代理。
+    /// 向官方客户端提供统一本地入口的常驻代理。
     Agent,
 }
 

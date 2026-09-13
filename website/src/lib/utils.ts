@@ -6,5 +6,5 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 /** FluxDown 开源仓库地址 */
-export const GITHUB_REPO_URL = "https://github.com/zerx-lab/FluxDown";
+export const GITHUB_REPO_URL = "https://github.com/SantaChains/FluxDown";
 

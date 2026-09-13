@@ -140,6 +140,11 @@ pub struct FileInfo {
     /// treat this as a warning and avoid multi-segment downloads.
     #[allow(dead_code)]
     pub content_encoding_compressed: bool,
+    /// probe 响应头 `Link: rel=duplicate` 发现的镜像清单（RFC 6249
+    /// Metalink/HTTP；空 = 无发现或 probe 被跳过）。与任务既有镜像在
+    /// `run_download_inner` 分流点合并（同 host 排除 + 去重，见
+    /// [`merge_mirror_urls`]）。
+    pub mirror_urls: Vec<String>,
 }
 
 #[derive(Default)]
@@ -235,6 +240,12 @@ pub struct DownloadParams {
     /// Format: "algo=hexhash", e.g. "sha-256=abc123..." or "md5=d41d8c...".
     /// Empty = skip verification.
     pub checksum: String,
+    /// 多镜像聚合的镜像 URL 清单（不含主 URL，主 URL = `url` 字段；
+    /// 空 = 无镜像，单节点池行为与现状逐字节一致）。由 manager 从
+    /// `tasks.mirror_urls` JSON 解析注入，来源：metalink 解析（`metalink.rs`）
+    /// 或 probe 的 `Link: rel=duplicate` 头发现。仅 http(s) 多段路径消费
+    /// （镜像池与 CDN IP 聚合互斥，见 `cdn::NodePool`）。
+    pub mirror_urls: Vec<String>,
     /// 浏览器扩展捕获的额外 HTTP 请求头（如 Authorization）。
     /// 在发起 HTTP 请求时附加到请求头中。
     ///
@@ -1070,6 +1081,33 @@ const PROBE_MAX_RETRIES: u32 = 3;
 /// Base delay for probe retries (used with exponential backoff).
 const PROBE_RETRY_BASE_DELAY: Duration = Duration::from_secs(1);
 
+/// 合并镜像清单（任务既有 + probe Link 头发现）：去重保序、排除主 URL
+/// 同 host 链接（跨 host 分散才有镜像池价值，设计 multi-mirror §5）、
+/// 只保留 http(s)。existing 在前（metalink 优先级序），discovered 在后。
+fn merge_mirror_urls(primary_url: &str, existing: &[String], discovered: &[String]) -> Vec<String> {
+    let primary_host = reqwest::Url::parse(primary_url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string));
+    let mut out: Vec<String> = Vec::new();
+    for url in existing.iter().chain(discovered) {
+        let Ok(parsed) = reqwest::Url::parse(url) else {
+            continue;
+        };
+        if !matches!(parsed.scheme(), "http" | "https") {
+            continue;
+        }
+        if let Some(host) = &primary_host
+            && parsed.host_str() == Some(host.as_str())
+        {
+            continue;
+        }
+        if !out.contains(url) {
+            out.push(url.clone());
+        }
+    }
+    out
+}
+
 /// Resolve file info with automatic retry on transient failures.
 ///
 /// On Windows, the very first HTTPS request from a new process can fail due to
@@ -1450,6 +1488,9 @@ async fn resolve_file_info_once(
         );
     }
 
+    // RFC 6249：Link: rel=duplicate 头顺带发现镜像（零额外请求）。
+    let mirror_urls = crate::metalink::discover_duplicate_links(&headers, final_url.as_str());
+
     Ok(FileInfo {
         file_name,
         total_bytes,
@@ -1458,6 +1499,7 @@ async fn resolve_file_info_once(
         etag,
         last_modified,
         content_encoding_compressed,
+        mirror_urls,
     })
 }
 
@@ -1594,6 +1636,9 @@ async fn resolve_file_info_plain_get_fallback(
         content_type
     );
 
+    // RFC 6249：Link: rel=duplicate 头顺带发现镜像（零额外请求）。
+    let mirror_urls = crate::metalink::discover_duplicate_links(&headers, final_url.as_str());
+
     Ok(FileInfo {
         file_name,
         total_bytes,
@@ -1602,6 +1647,7 @@ async fn resolve_file_info_plain_get_fallback(
         etag,
         last_modified,
         content_encoding_compressed,
+        mirror_urls,
     })
 }
 
@@ -1686,6 +1732,9 @@ async fn resolve_file_info_non_get(
         content_type
     );
 
+    // RFC 6249：Link: rel=duplicate 头顺带发现镜像（零额外请求）。
+    let mirror_urls = crate::metalink::discover_duplicate_links(&headers, final_url.as_str());
+
     Ok(FileInfo {
         file_name,
         total_bytes,
@@ -1695,6 +1744,7 @@ async fn resolve_file_info_non_get(
         etag,
         last_modified,
         content_encoding_compressed,
+        mirror_urls,
     })
 }
 
@@ -2551,11 +2601,21 @@ async fn run_download_inner(p: &DownloadParams) -> Result<(i64, Option<String>),
 
     let client = &p.client;
 
+    // 镜像优先互斥门（设计 multi-mirror §4.2）：起飞时已知镜像（metalink
+    // 链路注入；Link 头发现的镜像 probe 后才到手）且通过镜像门（未忽略
+    // TLS、无代理；**不含** `cdn_multi_enabled` 全局开关——镜像是任务自身显式多源意图）
+    // 时，CDN IP 聚合直接不发起：镜像池内每 URL 的 host 各异，逐镜像再叠加
+    // IP 钉定是组合爆炸，v1 明确不做。最终分流（含 Link 发现合并）在 finish_pool 调用点。
+    let known_mirrors = !p.mirror_urls.is_empty() && p.cdn.mirror_ok;
+
     // 多 CDN 候选聚合（解析 + connect 预筛）与下方 probe 并行发起，不增加
     // 起飞延迟；静态门控（开关/https/Range 已验证/单连接域名/熔断标记）
     // 不通过时为 None。结果在多段分支收割；单流分支主动中止。
-    let cdn_pending =
-        crate::cdn::spawn_aggregation(&p.url, &p.cdn, p.range_verified, &p.task_id, &p.db);
+    let cdn_pending = if known_mirrors {
+        None
+    } else {
+        crate::cdn::spawn_aggregation(&p.url, &p.cdn, p.range_verified, &p.task_id, &p.db)
+    };
 
     // When the browser extension provides a file size hint, skip the probe
     // phase (HEAD + GET Range:0-0) entirely.  One-time CDN URLs (e.g.
@@ -2627,6 +2687,8 @@ async fn run_download_inner(p: &DownloadParams) -> Result<(i64, Option<String>),
             last_modified: String::new(),
             // Hint mode skips the probe — no Content-Encoding info.
             content_encoding_compressed: false,
+            // Hint mode skips the probe — no Link-header mirror discovery.
+            mirror_urls: Vec::new(),
         }
     } else {
         log_info!("[download] task {} resolving file info...", p.task_id);
@@ -2944,18 +3006,64 @@ async fn run_download_inner(p: &DownloadParams) -> Result<(i64, Option<String>),
         // status=4 显式终止——DB 段行与临时文件【保留】，用户重试时 resume 重新
         // probe 真实大小接着下（fail-loud 且不丢进度）。
         // 收割并行发起的候选聚合，构造节点池（存活 <2 或未发起 → 单节点池，
-        // 行为与现状一致）。
-        let nodes = crate::cdn::finish_pool(
-            cdn_pending,
-            client,
-            &p.cdn,
-            &p.db,
-            &p.task_id,
-            effective_total_bytes,
-            segments,
-            &p.sink,
-        )
-        .await;
+        // 行为与现状一致）。镜像门在此分流：合并任务既有镜像（metalink
+        // 链路注入）与 probe 的 Link: rel=duplicate 发现（去重、排除与主
+        // URL 同 host 的链接），合并后非空即镜像优先——CDN 聚合让位（若
+        // 已并行发起则中止）。已学习为单连接的镜像 host 不进池（§4.3，
+        // 网盘类镜像常见），过滤后清空则退单节点池（不比现状差）。
+        let merged_mirrors = merge_mirror_urls(&p.url, &p.mirror_urls, &info.mirror_urls);
+        let nodes = if !merged_mirrors.is_empty() && p.cdn.mirror_ok {
+            // Link 头镜像后到（probe 与 CDN 聚合并行）：中止已发起的聚合。
+            if let Some(pending) = cdn_pending {
+                pending.abort();
+            }
+            let mirror_urls: Vec<String> = merged_mirrors
+                .iter()
+                .filter(|u| crate::segment_coordinator::domain_conn_cap(u) != Some(1))
+                .cloned()
+                .collect();
+            if mirror_urls.is_empty() {
+                log_info!(
+                    "[download] task {} 镜像全部被单连接域名过滤，退单节点池",
+                    p.task_id
+                );
+                crate::cdn::NodePool::single(client.clone())
+            } else {
+                let host = reqwest::Url::parse(&p.url)
+                    .ok()
+                    .and_then(|u| u.host_str().map(str::to_string))
+                    .unwrap_or_default();
+                log_info!(
+                    "[download] task {} 镜像池就绪（主 URL + {} 镜像）",
+                    p.task_id,
+                    mirror_urls.len()
+                );
+                crate::cdn::NodePool::mirrors(
+                    crate::cdn::ClientTemplate {
+                        // 镜像门已保证任务无代理（p.cdn.mirror_ok）——直连。
+                        proxy: crate::proxy_config::ProxyConfig::default(),
+                        user_agent: p.cdn.user_agent.clone(),
+                    },
+                    &host,
+                    mirror_urls,
+                    client.clone(),
+                    &p.task_id,
+                    Some(p.sink.clone()),
+                )
+            }
+        } else {
+            crate::cdn::finish_pool(
+                cdn_pending,
+                client,
+                &p.cdn,
+                &p.db,
+                &p.task_id,
+                effective_total_bytes,
+                segments,
+                &p.sink,
+            )
+            .await
+        };
         // summary 事件需要在多段下载结束后读取节点贡献统计。
         let nodes_for_summary = nodes.clone();
         // hint 解封仅 Auto 默认档：用户显式段数或自定义 auto_max 时尊重其天花板。

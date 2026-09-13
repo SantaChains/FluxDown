@@ -30,7 +30,12 @@ pub mod hls_downloader;
 pub mod link;
 pub mod logger;
 pub mod meta_prober;
+/// Metalink（RFC 5854 v4 / RFC 6249 v3）解析：多镜像清单 → NewTaskSpec。
+pub mod metalink;
 pub mod model;
+/// P2P / BT swarm 数据聚合：把 librqbit 内部状态投影为 FluxDown 自己
+/// 拥有的、可序列化的事件载荷，供 hub/server 走信号或 WS 推到 UI。
+pub mod p2p_stats;
 /// 插件系统（可选、可失败的下载中间层）。仅 `plugins` feature 下编译。
 #[cfg(feature = "plugins")]
 pub mod plugin;
@@ -47,6 +52,9 @@ pub mod selection;
 pub mod site_auth;
 pub mod speed_limiter;
 pub mod tracker_subscription;
+/// 传输层调优探测：BBR / MPTCP / QUIC 可用性与当前拥塞控制算法画像。
+/// 只读、不修改内核参数；引导用户在 OS 层启用 BBR。
+pub mod transport_tuning;
 /// 用户主目录下的系统标准目录（下载目录：Windows 已知文件夹 / XDG user-dirs）。
 pub mod user_dirs;
 /// 任务事件 Webhook 推送（免费自托管，BYOE）。
@@ -312,6 +320,10 @@ impl Engine {
         manager.load_webhook_endpoints().await;
         // 回灌投递日志：面板在重启后仍能看到「昨晚那批到底发出去没有」。
         manager.webhook().attach_db(db.clone()).await;
+        // 探测本机传输层能力（BBR / MPTCP / QUIC 可用性），结果以 info
+        // 日志输出，供宿主 UI 与诊断面板引用。不修改内核参数；仅事实
+        // 陈述，引导用户在 OS 层启用 BBR（详见 `readme.transport.md`）。
+        let _transport_report = transport_tuning::probe_and_log().await;
         Ok(Self {
             db,
             manager,

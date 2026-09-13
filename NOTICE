@@ -1,0 +1,27 @@
+FluxDown — Modified Version Notice
+===================================
+
+This software is a modified version of FluxDown, originally created by
+zerx-lab and licensed under the GNU Affero General Public License v3.0.
+
+  Original project : https://github.com/zerx-lab/FluxDown
+  Original copyright: © zerx-lab
+
+  Modified by      : SantaChains
+  Modification year: 2026
+  Fork repository (Corresponding Source per AGPL §13):
+                     https://github.com/SantaChains/FluxDown
+
+This modified version is distributed under the same GNU AGPL v3.0 license.
+The original LICENSE file (the verbatim GNU AGPL v3.0 text) is included
+unchanged.
+
+Per AGPL §5(a), this notice records that the work was modified and the
+relevant date. Per AGPL §13, because this program can interact with users
+remotely through a computer network (headless server / Web management UI),
+the Corresponding Source of this modified version is offered at the fork
+repository URL above.
+
+Original owner attribution (zerx-lab) is retained in accordance with
+AGPL §4 / §5; this notice is added on top of, and does not replace, the
+original copyright and license notices.

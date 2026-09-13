@@ -105,6 +105,12 @@ pub struct TaskInfo {
     /// `direct:pinned` / `proxy:cached` / `proxy:sampled` / `proxy:failover`；
     /// 空 = 非 Auto 模式或任务从未启动。
     pub auto_route: String,
+    /// 多镜像聚合的镜像 URL 清单（JSON 数组原文；空 = 无镜像）。首个元素
+    /// 在建任务时已折进 `url`（主 URL = 最高优先镜像），本字段存其余镜像，
+    /// 供 downloader 构造 [`crate::cdn::NodePool`] 镜像风味与 resume 恢复。
+    /// 来源：metalink 解析（`metalink.rs`）或 probe 的 `Link: rel=duplicate`
+    /// 头发现。仅 http(s) 任务有意义。
+    pub mirror_urls: String,
 }
 
 /// 命名队列元数据。字段对应 `hub::signals::QueueInfo`。

@@ -399,6 +399,7 @@ fn sample_task(id: &str, status: i32) -> TaskDto {
         seed_post_ratio_limit_milli: -2,
         seed_time_limit_minutes: -2,
         seed_inactive_time_limit_minutes: -2,
+        mirror_urls: Vec::new(),
     }
 }
 

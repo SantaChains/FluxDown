@@ -549,6 +549,7 @@ async fn cmd_add(client: &ApiClient, a: AddArgs, json: bool) -> Result<(), Clien
             http_user: a.http_user.clone().unwrap_or_default(),
             http_password: a.http_passwd.clone().unwrap_or_default(),
             save_site_auth: a.save_auth,
+            mirror_urls: Vec::new(),
         };
         match client.create_task(&req).await {
             Ok(res) => created.push(res.task_id),

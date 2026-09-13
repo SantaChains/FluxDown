@@ -20,8 +20,6 @@ import '../models/download_queue.dart';
 import '../models/settings_provider.dart';
 import '../widgets/flux_sonner.dart';
 import '../widgets/quick_download_form.dart';
-import 'cloud/cloud_auth_service.dart';
-import 'cloud/cloud_client.dart';
 import 'link/link_models.dart';
 import 'link/local_pairing_service.dart';
 import 'log_service.dart';
@@ -115,29 +113,6 @@ void submitQuickDownload({
       return;
     }
 
-    // 云账户设备 — 全部走 Dart 层调云 API，不改本机 rinf bincode 信号路径
-    // （本机路径见下方 entries.length==1/else 分支，完全不变）。
-    final deviceName =
-        CloudAuthService.instance.remoteDevices
-            .where((d) => d.deviceId == targetDeviceId)
-            .firstOrNull
-            ?.name ??
-        targetDeviceId;
-    CloudClient.instance
-        .dispatchTask(
-          toDevice: targetDeviceId,
-          url: result.urlText,
-          saveDir: saveDir,
-        )
-        .then((task) {
-          logInfo(_tag, 'dispatched task ${task.id} to device=$targetDeviceId');
-          _showResultToast(success: true, deviceName: deviceName);
-        })
-        .catchError((Object e) {
-          logError(_tag, 'dispatch to device=$targetDeviceId failed: $e');
-          _showResultToast(success: false, deviceName: deviceName);
-        });
-    return;
   }
 
   if (entries.length == 1) {
@@ -187,6 +162,7 @@ void submitQuickDownload({
             fileName: fileName,
             checksum: checksum,
             audioUrl: audioUrl,
+            mirrorUrls: const [],
           ),
         ],
         saveDir: saveDir,
@@ -213,6 +189,7 @@ void submitQuickDownload({
               fileName: e.fileName,
               checksum: e.checksum,
               audioUrl: e.audioUrl,
+              mirrorUrls: const [],
             ),
           )
           .toList(),

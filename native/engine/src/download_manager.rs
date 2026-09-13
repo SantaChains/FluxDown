@@ -1006,6 +1006,11 @@ pub struct NewTaskSpec {
     /// config（[`crate::site_auth::SITE_AUTH_CONFIG_KEY`]），后续同站点
     /// 建任务未显式提供凭据时自动套用。
     pub save_site_auth: bool,
+    /// 多镜像聚合的镜像 URL 清单（JSON 数组原文，不含主 URL；空 = 无
+    /// 镜像）。调用方已知镜像时直接传入（REST/信号入口）；metalink 直链
+    /// 则留空——`create_task` 检测 `.metalink`/`.meta4` 后缀后走 off-actor
+    /// 抓取解析链路自动回填（见 [`Self::on_metalink_ready`]）。
+    pub mirror_urls: String,
 }
 
 /// [`DownloadManager::create_task_group`] 的单个组成员条目（清单条目的引擎侧
@@ -1131,6 +1136,10 @@ struct QueuedTask {
     /// 空 = 初段解析。始终存在（feature 关时恒空且不读取）。
     #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
     resolver_item: String,
+    /// 多镜像聚合的镜像 URL 清单（JSON 数组原文，不含主 URL；空 = 无
+    /// 镜像）。metalink 抓取回流后由 [`DownloadManager::on_metalink_ready`]
+    /// 改写；透传给 [`downloader::DownloadParams::mirror_urls`]。
+    mirror_urls: String,
 }
 
 /// All state associated with a single actively-running download task.
@@ -1188,6 +1197,19 @@ pub struct ResolveOutcome {
     pub result: Result<Option<crate::plugin::ResolveResult>, crate::plugin::PluginError>,
     /// 用户在变体选择弹窗点关闭/取消 → 取消该任务（而非回退默认变体）。
     pub cancelled: bool,
+}
+
+/// off-actor metalink 抓取的回流结果（非 feature 门控：metalink 是核心下载
+/// 链路，与插件系统无关）。worker 无条件回流（含失败），交
+/// [`DownloadManager::on_metalink_ready`] 兑底，杜绝 `pending_metalink` 泄漏。
+///
+/// 成功时 worker 已把解析结果落库（主镜像 url / 镜像清单 / hash / 大小 /
+/// 文件名），回流只负责取出等待中的 `QueuedTask` 改写再入；失败时按
+/// 「不是 metalink」回退普通下载（原 QueuedTask 原样入队）。
+pub struct MetalinkOutcome {
+    pub task_id: String,
+    /// true = 解析成功且已落库；false = 抓取/解析失败，回退普通下载。
+    pub ok: bool,
 }
 
 /// resolve 等待中的任务状态。Start 携 `QueuedTask`（再入覆盖 res 后分派）；
@@ -1394,6 +1416,93 @@ fn apply_resolve_to_queued(queued: &mut QueuedTask, res: crate::plugin::ResolveR
     };
     queued.range_supported = res.range_supported;
 }
+
+/// metalink 抓取 + 解析 + 落库（off-actor worker 内执行，非 feature 门控）。
+/// 任何一步失败返回 false——调用方按「不是 metalink」回退普通下载，
+/// 与 `metalink::parse_metalink` 的「结构异常收敛成 None」策略闭环。
+async fn fetch_and_apply_metalink(
+    db: &Db,
+    task_id: &str,
+    url: &str,
+    client: &Client,
+    spec: &downloader::RequestSpec,
+) -> bool {
+    use std::time::Duration;
+
+    let timeout = Duration::from_secs(DownloadManager::METALINK_FETCH_TIMEOUT_SECS);
+    // GET 清单文档（鉴权上下文与真正下载一致——F020 同款理由：鉴权站点
+    // 对裸 GET 返回登录页，携带 cookies/Referer 才能拿到真清单）。
+    let request = downloader::build_request(client, url, reqwest::Method::GET, spec);
+    let sent = tokio::time::timeout(timeout, request.send()).await;
+    let Ok(Ok(resp)) = sent else {
+        return false;
+    };
+    if !resp.status().is_success() {
+        return false;
+    }
+    // 限长读：累计超过 MAX_METALINK_BYTES 即认定不是 metalink（误配的
+    // 大文件直链），立即断流——绝不把大响应体读进内存。
+    let mut body: Vec<u8> = Vec::new();
+    let mut resp = resp;
+    loop {
+        match tokio::time::timeout(timeout, resp.chunk()).await {
+            Ok(Ok(Some(chunk))) => {
+                if body.len() + chunk.len() > crate::metalink::MAX_METALINK_BYTES {
+                    return false;
+                }
+                body.extend_from_slice(&chunk);
+            }
+            Ok(Ok(None)) => break,
+            Ok(Err(_)) | Err(_) => return false,
+        }
+    }
+    let Some(file) = crate::metalink::parse_metalink(&body) else {
+        return false;
+    };
+    let Some(primary) = file.urls.first() else {
+        return false;
+    };
+    let mirrors: Vec<&str> = file.urls.iter().skip(1).map(|u| u.url.as_str()).collect();
+    let mirrors_json = serde_json::to_string(&mirrors).unwrap_or_default();
+    // 落库：主镜像 → url；原 metalink 直链 → origin_url（右键「复制下载
+    // 链接」给用户原链接，与 torrent 哨兵同款补偿）；其余镜像 / 全文件
+    // hash（verify_checksum 终审）/ 大小 / 文件名。单镜像清单也值得回填
+    // （hash 与大小仍来自权威清单）。
+    let _ = db.set_task_url(task_id, &primary.url).await;
+    let _ = db.set_task_origin_url(task_id, url).await;
+    let _ = db.set_task_mirror_urls(task_id, &mirrors_json).await;
+    if !file.checksum.is_empty() {
+        let _ = db.set_task_checksum(task_id, &file.checksum).await;
+    }
+    if file.size > 0 {
+        let _ = db.update_task_total_bytes(task_id, file.size).await;
+    }
+    if !file.name.is_empty() {
+        let _ = db.update_task_file_name(task_id, &file.name).await;
+    }
+    true
+}
+
+/// `tasks.mirror_urls` JSON 数组 → Vec（空串 / 解析失败 → 空，镜像功能
+/// 静默降级为单节点池，绝不阻断下载主链路）。
+fn parse_mirror_urls(json: &str) -> Vec<String> {
+    if json.is_empty() {
+        return Vec::new();
+    }
+    serde_json::from_str(json).unwrap_or_default()
+}
+
+/// 镜像 URL 清单 → `NewTaskSpec::mirror_urls` 的 JSON 数组原文（空清单 →
+/// 空串 = 无镜像）。宿主入口（hub 信号 / REST）持有 `Vec<String>`，引擎
+/// 持久层持有 JSON 原文，本函数是两侧的编码边界。
+pub fn mirror_urls_json(urls: &[String]) -> String {
+    if urls.is_empty() {
+        String::new()
+    } else {
+        serde_json::to_string(urls).unwrap_or_default()
+    }
+}
+
 pub struct DownloadManager {
     db: Db,
     client: Client,
@@ -1580,6 +1689,15 @@ pub struct DownloadManager {
     /// resume 侧再入的解析结果（on_resolve_ready → do_resume_task 传递，避免改签名）。
     #[cfg(feature = "plugins")]
     resume_applied: HashMap<String, crate::plugin::ResolveResult>,
+    /// off-actor metalink 抓取回流通道（worker → actor `on_metalink_ready`）。
+    /// 非 feature 门控：metalink 是核心下载链路，mobile（关插件）同样生效。
+    metalink_tx: mpsc::UnboundedSender<MetalinkOutcome>,
+    metalink_rx: Option<mpsc::UnboundedReceiver<MetalinkOutcome>>,
+    /// metalink 解析等待中的任务（create_task 存入完整 QueuedTask，
+    /// on_metalink_ready 取出改写再入）。任务在等待窗口内不占并发名额、
+    /// 不进 `pending_queue`——回流时重新走 `enqueue_persisted_task` 的
+    /// 容量检查，与 create_task 尾部语义一致。
+    pending_metalink: HashMap<String, QueuedTask>,
 }
 
 /// Configuration parameters for [`DownloadManager::new`].
@@ -1619,6 +1737,7 @@ impl DownloadManager {
         let (done_tx, done_rx) = mpsc::channel(64);
         let (retry_tx, retry_rx) = mpsc::channel(32);
         let (missing_cleanup_tx, missing_cleanup_rx) = mpsc::channel(8);
+        let (metalink_tx, metalink_rx) = mpsc::unbounded_channel();
         #[cfg(feature = "plugins")]
         let (resolve_tx, resolve_rx) = mpsc::unbounded_channel();
         #[cfg(feature = "plugins")]
@@ -1699,6 +1818,9 @@ impl DownloadManager {
             pending_resolve: HashMap::new(),
             #[cfg(feature = "plugins")]
             resume_applied: HashMap::new(),
+            metalink_tx,
+            metalink_rx: Some(metalink_rx),
+            pending_metalink: HashMap::new(),
         })
     }
 
@@ -1767,6 +1889,12 @@ impl DownloadManager {
     #[cfg(feature = "plugins")]
     pub fn take_resolve_rx(&mut self) -> Option<mpsc::UnboundedReceiver<ResolveOutcome>> {
         self.resolve_rx.take()
+    }
+
+    /// 交出 metalink 回流接收端给 actor loop。不接线会导致该宿主下
+    /// metalink 任务永不启动（下载卡死）——每个持活 manager 的宿主都必须泵。
+    pub fn take_metalink_rx(&mut self) -> Option<mpsc::UnboundedReceiver<MetalinkOutcome>> {
+        self.metalink_rx.take()
     }
 
     /// 交出 plugin_retry 接收端给 actor loop。
@@ -2178,6 +2306,7 @@ impl DownloadManager {
                 resolved: false,
                 range_supported: false,
                 resolver_item,
+                mirror_urls: String::new(),
             };
             self.begin_resolve_start(new_queued).await;
             self.load_and_send_all_tasks().await;
@@ -2297,6 +2426,7 @@ impl DownloadManager {
                 resolved: false,
                 range_supported: false,
                 resolver_item: mother_resolver_item,
+                mirror_urls: String::new(),
             };
             self.begin_resolve_start(mother_queued).await;
 
@@ -2329,6 +2459,7 @@ impl DownloadManager {
                     resolved: false,
                     range_supported: false,
                     resolver_item: sib.resolver_item,
+                    mirror_urls: String::new(),
                 };
                 self.enqueue_persisted_task(sib_queued, true).await;
             }
@@ -2637,6 +2768,33 @@ impl DownloadManager {
         if let Some(ref bt) = self.bt_session {
             bt.set_upload_speed_limit(bps);
         }
+    }
+
+    /// 聚合单个 BT 任务的 swarm 状态——P2P 面板/详情页数据源。
+    ///
+    /// 非 BT 任务、BT session 未惰性创建、或 BT 任务尚未在 handles
+    /// map 中（典型场景：magnet 元数据还在 DHT 解析中）时返回 `None`。
+    /// 调用方据此在 UI 上把这种任务标注为「P2P 信息不可用」而不是
+    /// 显示零值面板。
+    ///
+    /// 内部走 `SharedBtSession::cached_handle` 的 async Mutex 锁，但持
+    /// 锁期间只做一次 HashMap 查找与 clone，开销可忽略。**适合作为
+    /// 500ms~2s 定时 tick 的轮询入口**——不要在每帧 UI 刷新都调。
+    pub async fn task_swarm_stats(&self, task_id: &str) -> Option<crate::p2p_stats::SwarmStats> {
+        let bt = self.bt_session.as_ref()?;
+        let handle = bt.cached_handle(task_id).await?;
+        Some(crate::p2p_stats::collect_task_swarm_stats(task_id, &handle))
+    }
+
+    /// 聚合全局 BT session 的跨任务统计——P2P 面板顶部摘要栏数据源。
+    ///
+    /// BT session 未创建时返回 `None`，调用方据此显示「未启动」。
+    /// 同步、无锁——librqbit 内部是 atomic 计数 + SpeedEstimator 快照。
+    pub fn session_p2p_stats(&self) -> Option<crate::p2p_stats::SessionP2pStats> {
+        let bt = self.bt_session.as_ref()?;
+        Some(crate::p2p_stats::collect_session_stats(
+            bt.session().as_ref(),
+        ))
     }
 
     /// Update proxy configuration.  Rebuilds the shared HTTP client so that
@@ -4513,6 +4671,7 @@ impl DownloadManager {
             http_user,
             http_password,
             save_site_auth,
+            mirror_urls,
         } = spec;
         // HTTP Basic 认证：显式凭据 → 生成 Authorization 头
         // （覆盖捕获到的同名头）并按需保存到站点凭据库；未显式提供且头中
@@ -4641,6 +4800,15 @@ impl DownloadManager {
             log_info!("save_audio_url error: {}", e);
         }
 
+        // 调用方已知镜像清单（REST/信号入口直接携带，如外部 metalink 解析
+        // 结果）：直接落库。metalink 直链自动检测链路不走这里（mirror_urls
+        // 为空，由下方 off-actor 抓取回填）。
+        if !mirror_urls.is_empty()
+            && let Err(e) = self.db.set_task_mirror_urls(&task_id, &mirror_urls).await
+        {
+            log_info!("set_task_mirror_urls error: {}", e);
+        }
+
         // 批量建组/裂变期间抑制逐任务广播，尾部统一 TasksSnapshot 覆盖。
         if !self.suppress_bulk_broadcasts {
             self.sink.emit(EngineEvent::TaskProgress {
@@ -4753,6 +4921,31 @@ impl DownloadManager {
             // 稍后下载：不启动、不排队。后台 probe 让 UI 尽快拿到文件名/
             // 大小；带 resolver（探测原始页面 URL 无意义）或 BT（无 HTTP
             // 元数据可探）任务跳过，语义与排队/直启分支一致。
+            if crate::metalink::is_metalink_url(&url)
+                && torrent_file_bytes.is_empty()
+                && !has_resolver
+            {
+                // metalink 直链：off-actor 抓取清单本身就是探测（文件名/
+                // 大小/hash/镜像全部来自清单），不再跑普通 probe。此处不存
+                // `pending_metalink`——回流时无条目即跳过，任务保持 paused
+                // 等用户恢复（恢复走 DB，拿到 worker 回填的主镜像与清单）。
+                let metalink_spec = downloader::RequestSpec::from_captured(
+                    method.as_deref(),
+                    cookies.clone(),
+                    referrer.clone(),
+                    extra_headers.clone(),
+                    body.clone(),
+                );
+                let (metalink_client, _, _) = self.task_http_context(
+                    &db_url,
+                    &proxy_url,
+                    &user_agent,
+                    &queue_id,
+                    ignore_tls_errors,
+                );
+                self.spawn_metalink_worker(task_id, url, metalink_client, metalink_spec);
+                return Some(created_id);
+            }
             if !has_resolver && !is_bt {
                 let probe_spec = downloader::RequestSpec::from_captured(
                     method.as_deref(),
@@ -4780,8 +4973,19 @@ impl DownloadManager {
             return Some(created_id);
         }
 
+        // Metalink（RFC 5854 `.meta4` / RFC 6249 `.metalink`）直链检测提前判定
+        //（url/torrent_file_bytes/resolver_plugin_id 即将 move 进 QueuedTask）：
+        // 清单文档本身不是下载目标——off-actor 抓取解析出主镜像 + 镜像池
+        // + hash + 大小后改写任务再入（AGENTS.md「HTTP 的 .torrent 直链先
+        // 抓字节再建任务」的同构链路）。等待窗口不占并发名额、不进
+        // `pending_queue`；抓取/解析失败按「不是 metalink」回退普通下载。
+        // 带 resolver 的任务不拦截（插件解析自己的 url，二段流程优先）。
+        let is_metalink_task = crate::metalink::is_metalink_url(&url)
+            && torrent_file_bytes.is_empty()
+            && resolver_plugin_id.is_empty();
+
         let queued = QueuedTask {
-            task_id,
+            task_id: task_id.clone(),
             url: db_url,
             save_dir,
             file_name,
@@ -4805,7 +5009,31 @@ impl DownloadManager {
             resolved: false,
             range_supported: false,
             resolver_item,
+            mirror_urls,
         };
+
+        if is_metalink_task {
+            // metalink 任务无任何二次选择（画质/文件/变体），天然无人值守。
+            let _ = self.db.set_task_unattended(&task_id).await;
+            let metalink_spec = downloader::RequestSpec::from_captured(
+                queued.method.as_deref(),
+                queued.cookies.clone(),
+                queued.referrer.clone(),
+                queued.extra_headers.clone(),
+                queued.body.clone(),
+            );
+            let (metalink_client, _, _) = self.task_http_context(
+                &queued.url,
+                &queued.proxy_url,
+                &queued.user_agent,
+                &queued.queue_id,
+                queued.ignore_tls_errors,
+            );
+            self.pending_metalink.insert(task_id.clone(), queued);
+            self.spawn_metalink_worker(task_id, url, metalink_client, metalink_spec);
+            return Some(created_id);
+        }
+
         self.enqueue_persisted_task(queued, has_resolver).await;
         Some(created_id)
     }
@@ -4898,10 +5126,13 @@ impl DownloadManager {
         user_agent: &str,
     ) -> crate::cdn::CdnTaskInput {
         use crate::proxy_config::ProxyMode;
+        // 镜像聚合门：仅 TLS + 代理互斥，不含全局开关（见 CdnTaskInput::mirror_ok）。
+        let mirror_ok = !ignore_tls_errors && task_proxy.mode == ProxyMode::None;
         crate::cdn::CdnTaskInput {
             enabled: self.cdn_multi_enabled
                 && !ignore_tls_errors
                 && task_proxy.mode == ProxyMode::None,
+            mirror_ok,
             max_nodes: self
                 .cdn_max_nodes
                 .clamp(0, crate::cdn::MAX_NODES_LIMIT as i32) as usize,
@@ -5138,6 +5369,71 @@ impl DownloadManager {
         });
     }
 
+    /// metalink 清单抓取超时（秒）——与 `meta_prober::PROBE_TIMEOUT_SECS`
+    /// 同档：清单是几十 KB 的小文档，8s 不够说明源站不可用。
+    const METALINK_FETCH_TIMEOUT_SECS: u64 = 8;
+
+    /// off-actor metalink 抓取 worker：GET 清单文档（限长读，≤1 MiB）→
+    /// 解析 → 落库（主镜像 url / origin_url / 镜像清单 / hash / 大小 /
+    /// 文件名）→ 回流 [`Self::on_metalink_ready`] 再入。失败同样回流
+    /// （ok=false → 回退普通下载），无条件回流杜绝 `pending_metalink` 泄漏
+    /// （与 `spawn_resolve_worker` 同款契约）。
+    fn spawn_metalink_worker(
+        &self,
+        task_id: String,
+        url: String,
+        client: Client,
+        spec: downloader::RequestSpec,
+    ) {
+        let db = self.db.clone();
+        let tx = self.metalink_tx.clone();
+        tokio::spawn(async move {
+            let ok = fetch_and_apply_metalink(&db, &task_id, &url, &client, &spec).await;
+            let _ = tx.send(MetalinkOutcome { task_id, ok });
+        });
+    }
+
+    /// metalink 抓取回流再入（actor 上下文）。成功时 worker 已把解析结果
+    /// 落库——此处从 DB 读回终态改写等待中的 QueuedTask（主镜像 url /
+    /// 镜像清单 / hash / 大小 hint / 文件名），再走 `enqueue_persisted_task`
+    /// 重新过容量检查（与 create_task 尾部语义一致）；失败按「不是
+    /// metalink」回退普通下载（原 QueuedTask 原样入队，诚实失败）。
+    pub async fn on_metalink_ready(&mut self, out: MetalinkOutcome) {
+        // start_paused 创建的任务没有条目（worker 只更新 DB 元数据，
+        // 任务保持 paused 等 resume 走 DB）；pause/cancel/delete 窗口内被
+        // 清理的条目同样在此静默落地。
+        let Some(mut queued) = self.pending_metalink.remove(&out.task_id) else {
+            return;
+        };
+        // DB 复查：任务已被删除 → 丢弃（worker 的 UPDATE 已是 no-op）。
+        let Ok(Some(task)) = self.db.load_task_by_id(&out.task_id).await else {
+            return;
+        };
+        if out.ok {
+            // 读回 worker 落库的最终事实。size>0 作 hint：跳过 probe、
+            // 首连接保守验证 Range 后多段化（与浏览器扩展 hint 同语义）。
+            queued.url = task.url;
+            queued.mirror_urls = task.mirror_urls;
+            queued.checksum = task.checksum;
+            queued.hint_file_size = task.total_bytes;
+            if !task.file_name.is_empty() {
+                queued.file_name = task.file_name;
+            }
+            log_info!(
+                "[manager] metalink resolved for task {}: primary={} mirrors={}",
+                out.task_id,
+                queued.url,
+                parse_mirror_urls(&queued.mirror_urls).len()
+            );
+        } else {
+            log_info!(
+                "[manager] metalink fetch/parse failed for task {}, falling back to plain download",
+                out.task_id
+            );
+        }
+        self.enqueue_persisted_task(queued, false).await;
+    }
+
     /// Internal: actually spawn the download task (no concurrency check).
     async fn do_start_task(&mut self, queued: QueuedTask) {
         // 插件惰性解析守卫（体首）：命中 resolver 且未解析 → off-actor resolve 后再入。
@@ -5171,6 +5467,7 @@ impl DownloadManager {
             resolved: _,
             range_supported,
             resolver_item: _,
+            mirror_urls,
         } = queued;
 
         // Four-tier segment count priority:
@@ -5500,6 +5797,7 @@ impl DownloadManager {
                 sink: self.sink.clone(),
                 selector: self.selector.clone(),
                 checksum,
+                mirror_urls: parse_mirror_urls(&mirror_urls),
                 extra_headers,
                 spec,
                 audio_url,
@@ -5675,6 +5973,9 @@ impl DownloadManager {
 
     async fn pause_task_inner(&mut self, task_id: &str, notify: bool) {
         self.clear_pending_resolve(task_id);
+        // metalink 等待窗口内被暂停：丢弃等待条目（DB 已由 worker 回填，
+        // 后续 resume 从 DB 读到主镜像与清单）。
+        self.pending_metalink.remove(task_id);
         self.retry_scheduled.remove(task_id);
         // A repeated pause while the previous generation is still flushing is
         // idempotent. Preserve an explicit notification request, but do not
@@ -6094,6 +6395,7 @@ impl DownloadManager {
                     resolved: false,
                     range_supported: false,
                     resolver_item: String::new(),
+                    mirror_urls: t.mirror_urls,
                 });
                 // 入队后立即广播最新队列位置(与 create_task 一致),否则要等后续
                 // drain_queue 才广播,期间 UI 显示过时的排队位置。
@@ -6620,6 +6922,7 @@ impl DownloadManager {
                 sink: self.sink.clone(),
                 selector: self.selector.clone(),
                 checksum: task.checksum,
+                mirror_urls: parse_mirror_urls(&task.mirror_urls),
                 extra_headers: resume_extra_headers.clone(),
                 // method/body 仍不持久化：恢复一律按 GET 重发（重放 POST 体有
                 // 副作用风险，成本远高于收益）。cookies/referrer/extra_headers
@@ -6695,6 +6998,7 @@ impl DownloadManager {
         self.auto_failover_pending.remove(task_id);
         self.auto_failover_attempts.remove(task_id);
         self.clear_pending_resolve(task_id);
+        self.pending_metalink.remove(task_id);
 
         // Remove from pending queue if queued.
         if let Some(pos) = self.pending_queue.iter().position(|q| q.task_id == task_id) {
@@ -6783,6 +7087,7 @@ impl DownloadManager {
         self.auto_failover_attempts.remove(task_id);
         self.retry_scheduled.remove(task_id);
         self.clear_pending_resolve(task_id);
+        self.pending_metalink.remove(task_id);
 
         // Remove from pending queue if queued.
         if let Some(pos) = self.pending_queue.iter().position(|q| q.task_id == task_id) {
@@ -7800,6 +8105,7 @@ impl DownloadManager {
                 resolved: false,
                 range_supported: false,
                 resolver_item: String::new(),
+                mirror_urls: task_row.mirror_urls,
             });
             true
         }
@@ -7833,6 +8139,7 @@ impl DownloadManager {
                 .retain(|e| !idset.contains(e.task_id.as_str()));
             for tid in &queued {
                 self.clear_pending_resolve(tid);
+                self.pending_metalink.remove(tid);
             }
             if let Err(e) = self.db.update_tasks_status_batch(&queued, 2).await {
                 log_info!("[manager] batch_pause: persist paused error: {}", e);

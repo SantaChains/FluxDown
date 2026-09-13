@@ -453,6 +453,7 @@ pub(crate) fn build_create_task_request(
         user_agent: opts.user_agent,
         queue_id: String::new(),
         checksum: opts.checksum,
+        mirror_urls: Vec::new(),
         ignore_tls_errors: opts.ignore_tls_errors,
         headers: opts.headers,
         torrent_b64,
@@ -812,6 +813,7 @@ mod tests {
             seed_post_ratio_limit_milli: -2,
             seed_time_limit_minutes: -2,
             seed_inactive_time_limit_minutes: -2,
+            mirror_urls: Vec::new(),
         }
     }
 

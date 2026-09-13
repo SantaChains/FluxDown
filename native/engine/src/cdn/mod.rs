@@ -53,6 +53,11 @@ const CONNECT_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 #[derive(Clone, Default)]
 pub struct CdnTaskInput {
     pub enabled: bool,
+    /// 镜像聚合门（multi-mirror §4.2）：任务未忽略 TLS 错误且未启用代理时
+    /// 为 `true`。**不含**全局 `cdn_multi_enabled` 开关——metalink/Link 镜像是
+    /// 任务自身的显式多源意图（aria2 同语义默认启用），与 IP 钉定聚合的
+    /// 用户开关解耦；否则 CLI B 模式等无配置入口的宿主将永远无法用镜像。
+    pub mirror_ok: bool,
     /// 钉定节点数上限（SYS 兜底节点不计入）。**0 = 自动**：按文件大小与
     /// 并发连接数在 [`finish_pool`] 里经 [`auto_max_nodes`] 推导。
     pub max_nodes: usize,
@@ -363,6 +368,7 @@ mod tests {
     fn enabled_input() -> CdnTaskInput {
         CdnTaskInput {
             enabled: true,
+            mirror_ok: true,
             max_nodes: 3,
             ..Default::default()
         }

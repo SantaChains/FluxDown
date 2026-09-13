@@ -21,8 +21,8 @@ import '../services/open_folder.dart';
 import '../services/clipboard_file.dart';
 import 'queue_manager_dialog.dart';
 import 'task_columns.dart';
-import '../services/cloud/cloud_auth_service.dart';
-import '../services/cloud/cloud_models.dart';
+import '../services/link/link_models.dart';
+import '../services/link/local_pairing_service.dart';
 
 /// 插件系统失败任务的错误消息前缀（引擎/hub/server 固定格式，逃生舱按钮据此判断）。
 const _pluginErrorPrefix = '[插件]';
@@ -323,7 +323,7 @@ class _TaskListItemState extends State<TaskListItem> {
                     const SizedBox(width: 6),
                     _ProtocolBadge(task: task),
                   ],
-                  if (CloudAuthService.instance.hasRemoteDevices) ...[
+                  if (LocalPairingService.instance.hasLocalDevices) ...[
                     const SizedBox(width: 6),
                     _DeviceBadge(task: task),
                   ],
@@ -395,7 +395,7 @@ class _ProtocolBadge extends StatelessWidget {
 
 // =============================================================================
 // 设备徽标（9.5px 大写，视觉规格同协议徽标，design-proto-spec §5 `.badge`；
-// 仅 CloudAuthService.hasRemoteDevices 时由调用方渐进披露渲染）
+// 仅 LocalPairingService.hasLocalDevices 时由调用方渐进披露渲染）
 // =============================================================================
 
 class _DeviceBadge extends StatelessWidget {
@@ -403,16 +403,11 @@ class _DeviceBadge extends StatelessWidget {
   const _DeviceBadge({required this.task});
 
   /// 按 task.deviceId 在设备名册中查找对应设备（本机 deviceId 为空字符串）。
-  CloudDevice? get _matchedDevice {
-    final devices = CloudAuthService.instance.devices;
-    if (task.deviceId.isEmpty) {
-      for (final d in devices) {
-        if (d.isCurrent) return d;
-      }
-      return null;
-    }
+  LocalDevice? get _matchedDevice {
+    if (task.deviceId.isEmpty) return null;
+    final devices = LocalPairingService.instance.localDevices;
     for (final d in devices) {
-      if (d.deviceId == task.deviceId) return d;
+      if (d.fingerprint == task.deviceId) return d;
     }
     return null;
   }

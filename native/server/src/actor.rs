@@ -15,6 +15,7 @@ use fluxdown_engine::bt_downloader::{BtConfig, BtMseMode};
 use fluxdown_engine::db::Db;
 use fluxdown_engine::download_manager::{
     CreateGroupSpec, NewTaskSpec, ResolveOutcome, ResolvePreviewOutcome, TaskDone,
+    mirror_urls_json,
 };
 use fluxdown_engine::log_info;
 use fluxdown_engine::proxy_config::ProxyConfig;
@@ -268,6 +269,7 @@ pub async fn run_actor(
     mut resolve_rx: mpsc::UnboundedReceiver<ResolveOutcome>,
     mut plugin_retry_rx: mpsc::UnboundedReceiver<(String, u64)>,
     mut missing_cleanup_rx: mpsc::Receiver<Vec<String>>,
+    mut metalink_rx: mpsc::UnboundedReceiver<fluxdown_engine::download_manager::MetalinkOutcome>,
 ) {
     // 启动预热：加载队列缓存（每队列限速/并发生效）+ 广播全量任务快照。
     engine.manager.load_queues().await;
@@ -328,6 +330,9 @@ pub async fn run_actor(
             }
             Some(out) = resolve_rx.recv() => {
                 engine.manager.on_resolve_ready(out).await;
+            }
+            Some(out) = metalink_rx.recv() => {
+                engine.manager.on_metalink_ready(out).await;
             }
             Some((task_id, delay_ms)) = plugin_retry_rx.recv() => {
                 engine.manager.plugin_request_retry(&task_id, delay_ms).await;
@@ -410,6 +415,7 @@ async fn handle_cmd(cmd: ActorCmd, engine: &mut Engine) {
                     user_agent: req.user_agent,
                     queue_id: req.queue_id,
                     checksum: req.checksum,
+                    mirror_urls: mirror_urls_json(&req.mirror_urls),
                     ignore_tls_errors: req.ignore_tls_errors,
                     extra_headers: req.headers.unwrap_or_default(),
                     method: req.method,

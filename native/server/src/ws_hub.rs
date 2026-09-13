@@ -1088,6 +1088,7 @@ mod tests {
             rss_source_id: String::new(),
             origin_url: String::new(),
             auto_route: String::new(),
+            mirror_urls: String::new(),
         }]));
 
         let snap = hub.live_speeds_snapshot();
@@ -1152,6 +1153,7 @@ mod tests {
             rss_source_id: String::new(),
             origin_url: String::new(),
             auto_route: String::new(),
+            mirror_urls: String::new(),
         }
     }
 

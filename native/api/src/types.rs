@@ -175,6 +175,7 @@ pub struct DownloadRequest {
 ///     rss_source_id: String::new(),
 ///     origin_url: String::new(),
 ///     auto_route: String::new(),
+///     mirror_urls: String::new(),
 /// };
 /// let dto = TaskDto::from(info);
 /// assert_eq!(dto.task_id, "t1");
@@ -262,6 +263,11 @@ pub struct TaskDto {
     /// 任务级不活跃做种时长上限（分钟）。哨兵语义同上。
     #[serde(default = "default_seed_limit_inherit")]
     pub seed_inactive_time_limit_minutes: i64,
+    /// 多镜像聚合的其余镜像 URL 清单（不含 `url` 主源；空 = 无镜像）。
+    /// 来源：metalink 解析 / probe `Link: rel=duplicate` 发现 / 建任务时
+    /// 调用方直接携带。
+    #[serde(default)]
+    pub mirror_urls: Vec<String>,
 }
 
 impl From<fluxdown_engine::model::TaskInfo> for TaskDto {
@@ -297,6 +303,7 @@ impl From<fluxdown_engine::model::TaskInfo> for TaskDto {
             seed_post_ratio_limit_milli: t.seed_post_ratio_limit_milli,
             seed_time_limit_minutes: t.seed_time_limit_minutes,
             seed_inactive_time_limit_minutes: t.seed_inactive_time_limit_minutes,
+            mirror_urls: serde_json::from_str(&t.mirror_urls).unwrap_or_default(),
         }
     }
 }
@@ -427,6 +434,11 @@ pub struct CreateTaskRequest {
     /// Checksum spec，格式 `algo=hexhash`（空 = 跳过校验）。
     #[serde(default)]
     pub checksum: String,
+    /// 多镜像聚合的其余镜像 URL（不含 `url` 主源；空 = 无镜像）。引擎
+    /// 据此构造镜像节点池跨 host 分流；`.metalink`/`.meta4` 直链无需传
+    /// ——引擎自动抓取清单回填。
+    #[serde(default)]
+    pub mirror_urls: Vec<String>,
     /// 忽略 HTTPS 证书错误。缺省 false（严格验证）。
     #[serde(default)]
     pub ignore_tls_errors: bool,
@@ -1089,6 +1101,7 @@ mod tests {
             seed_post_ratio_limit_milli: -2,
             seed_time_limit_minutes: -2,
             seed_inactive_time_limit_minutes: -2,
+            mirror_urls: Vec::new(),
         };
         let v = serde_json::to_value(&dto).unwrap();
         assert_eq!(v["taskId"], "t1");

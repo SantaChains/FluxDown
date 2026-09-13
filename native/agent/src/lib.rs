@@ -1,7 +1,7 @@
 //! FluxDown 官方客户端本地代理的应用边界。
 //!
-//! 本 crate 承载账户、云同步、设备协同与 UI Gateway；下载执行和下载任务事实属于
-//! `fluxdown_daemon`。
+//! 本 crate 只承载本地 UI Gateway；下载执行和下载任务事实属于 `fluxdown_daemon`。
+//! 纯本地优先：不含账户、云同步或设备协同能力。
 
 use fluxdown_protocol::{ServiceHello, ServiceRole};
 
@@ -21,7 +21,7 @@ mod tests {
     use super::{SERVICE_NAME, service_hello};
 
     #[test]
-    fn identifies_as_cloud_agent() {
+    fn identifies_as_local_agent() {
         let hello = service_hello();
 
         assert_eq!(hello.role, ServiceRole::Agent);

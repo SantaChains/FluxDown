@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -22,10 +21,6 @@ import 'queue_manager_dialog.dart';
 import 'rss_manager_dialog.dart';
 import 'rss_wizard_dialog.dart';
 import '../models/rss_provider.dart';
-import '../services/cloud/cloud_auth_service.dart';
-import '../services/cloud/device_identity.dart';
-import '../services/link/local_pairing_service.dart';
-import 'add_device_dialog.dart';
 
 class Sidebar extends StatefulWidget {
   final DownloadController controller;
@@ -46,10 +41,6 @@ class _SidebarState extends State<Sidebar> {
   @override
   void initState() {
     super.initState();
-    if (CloudAuthService.instance.isLoggedIn) {
-      unawaited(CloudAuthService.instance.refreshDevices());
-    }
-    CloudAuthService.instance.addListener(_onDeviceRosterChanged);
     widget.controller.addListener(_scheduleFilterSync);
     widget.settingsProvider.addListener(_scheduleFilterSync);
     _scheduleFilterSync();
@@ -57,7 +48,6 @@ class _SidebarState extends State<Sidebar> {
 
   @override
   void dispose() {
-    CloudAuthService.instance.removeListener(_onDeviceRosterChanged);
     widget.controller.removeListener(_scheduleFilterSync);
     widget.settingsProvider.removeListener(_scheduleFilterSync);
     super.dispose();
@@ -86,21 +76,10 @@ class _SidebarState extends State<Sidebar> {
 
   /// RSS 条目流是否正占着主区。
   ///
-  /// RSS 项与其余分区不是同一类东西：状态 / 队列 / 分类 / 设备互相叠加成
-  /// 一组任务筛选，RSS 却是整页切换。所以选中订阅时，任务侧的高亮必须全部
-  /// 熄灭——否则侧边栏在同时宣称「你在全部任务」和「你在这条订阅」。
+  /// RSS 项与其余分区不是同一类东西：状态 / 队列 / 分类互相叠加成一组任务
+  /// 筛选，RSS 却是整页切换。所以选中订阅时，任务侧的高亮必须全部熄灭——
+  /// 否则侧边栏在同时宣称「你在全部任务」和「你在这条订阅」。
   bool get _rssActive => widget.rssProvider.selectedSourceId.isNotEmpty;
-
-  /// 设备名册（远程设备增删/在线态）变化时，清理已失效的设备筛选。
-  /// 绝不在 build 内 notify —— 排到帧末执行。
-  void _onDeviceRosterChanged() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      widget.controller.pruneDeviceFilter({
-        for (final d in CloudAuthService.instance.remoteDevices) d.deviceId,
-      });
-    });
-  }
 
   // ─────────────────────────────────────────────
   // 图标映射
@@ -145,8 +124,6 @@ class _SidebarState extends State<Sidebar> {
                 widget.controller,
                 widget.settingsProvider,
                 widget.rssProvider,
-                CloudAuthService.instance,
-                LocalPairingService.instance,
               ]),
               builder: (context, _) {
                 final ctrl = widget.controller;
@@ -170,13 +147,6 @@ class _SidebarState extends State<Sidebar> {
                       ],
                       if (sp.showSidebarCategory)
                         _buildCategorySection(ctrl, s, c),
-                      if (sp.showSidebarDeviceEffective(
-                        CloudAuthService.instance.hasRemoteDevices ||
-                            LocalPairingService.instance.hasLocalDevices,
-                      )) ...[
-                        _buildDeviceSection(ctrl, s, c),
-                        const SizedBox(height: 6),
-                      ],
                     ],
                   ),
                 );
@@ -636,97 +606,6 @@ class _SidebarState extends State<Sidebar> {
     );
   }
 
-  // ─────────────────────────────────────────────
-  // 设备区块（可折叠，多设备协同渐进披露；无远程设备也无本地配对设备且未强制开启时整区不渲染）
-  // ─────────────────────────────────────────────
-
-  /// 设备类型徽标：桌面(monitor)/移动(smartphone)/未知或服务器(server)。
-  static IconData _deviceTypeIcon(String? platform) => switch (platform) {
-    'windows' || 'macos' || 'linux' => LucideIcons.monitor,
-    'android' || 'ios' => LucideIcons.smartphone,
-    _ => LucideIcons.server,
-  };
-
-  Widget _buildDeviceSection(DownloadController ctrl, S s, AppColors c) {
-    final deviceFilter = ctrl.deviceFilter;
-    final remoteDevices = CloudAuthService.instance.remoteDevices;
-    // deviceLabel 判重名基准必须含本机：本机与某台远端同名时，本机也在
-    // 设置页/新建下载里被加了短码，侧栏若只按 remoteDevices 判重名会漏判，
-    // 同一台远端设备在三处入口显示不同名字。
-    final allDevices = CloudAuthService.instance.devices;
-    // 本地配对设备（局域网直连，免账号）。移动端 supported 恒为 false，
-    // localDevices 恒为空列表，天然不需要额外的平台判断。
-    final localDevices = LocalPairingService.instance.localDevices;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        GestureDetector(
-          onSecondaryTapUp: (d) => _showSectionContextMenu(
-            context,
-            d.globalPosition,
-            s,
-            onHide: () => widget.settingsProvider.setShowSidebarDevice(false),
-          ),
-          child: _CollapsibleSectionHeader(
-            title: s.deviceSection,
-            expanded: widget.settingsProvider.sidebarDeviceExpanded,
-            c: c,
-            onToggle: () => widget.settingsProvider.setSidebarDeviceExpanded(
-              !widget.settingsProvider.sidebarDeviceExpanded,
-            ),
-          ),
-        ),
-        if (widget.settingsProvider.sidebarDeviceExpanded) ...[
-          const SizedBox(height: 4),
-          _NavItem(
-            icon: LucideIcons.globe,
-            label: s.allDevices,
-            isSelected: !_rssActive && deviceFilter == null,
-            onTap: () => _selectTaskView(() => ctrl.setDeviceFilter(null)),
-          ),
-          _NavItem(
-            icon: LucideIcons.monitor,
-            label: s.thisDevice,
-            count: ctrl.countForDevice(''),
-            isSelected: !_rssActive && deviceFilter == '',
-            isOnline: true,
-            onTap: () => _selectTaskView(() => ctrl.setDeviceFilter('')),
-          ),
-          for (final device in remoteDevices)
-            _NavItem(
-              icon: _deviceTypeIcon(device.platform),
-              label: deviceLabel(device, allDevices),
-              count: ctrl.countForDevice(device.deviceId),
-              isSelected: !_rssActive && deviceFilter == device.deviceId,
-              isOnline: device.isOnline,
-              onTap: () =>
-                  _selectTaskView(() => ctrl.setDeviceFilter(device.deviceId)),
-            ),
-          for (final device in localDevices)
-            _LocalDeviceStatusRow(
-              // 局域网直连设备用不同图标（antenna）与云账户设备
-              // （monitor/smartphone/server）区分，无需额外文案标签。
-              icon: LucideIcons.antenna,
-              label: device.name,
-              online: device.online,
-              statusLabel: device.online ? s.deviceOnline : s.deviceOffline,
-            ),
-          // 「＋ 添加设备」：直接弹出添加设备弹窗（未登录默认本地配对页），
-          // 无需先进入设置页；设置页内的入口用于隐藏该侧栏项后的管理编辑。
-          // 移动端不支持本地互联——本地配对是免账号添加设备的唯一路径
-          // （云账户设备登录后自动出现，无需手动添加），故整体隐藏该入口。
-          if (LocalPairingService.instance.supported)
-            _NavItem(
-              icon: LucideIcons.plus,
-              label: s.addDeviceEntry,
-              isSelected: false,
-              onTap: () => showAddDeviceDialog(context),
-            ),
-        ],
-      ],
-    );
-  }
-
   void _showSectionContextMenu(
     BuildContext context,
     Offset position,
@@ -923,7 +802,6 @@ class _NavItem extends StatefulWidget {
     this.count,
     required this.isSelected,
     this.showActivityDot = false,
-    this.isOnline,
     required this.onTap,
   });
 
@@ -949,20 +827,7 @@ class _NavItemState extends State<_NavItem> {
               border: Border.all(color: c.surface1, width: 1),
             ),
           )
-        : widget.isOnline == null
-        ? null
-        : Container(
-            width: 6,
-            height: 6,
-            decoration: BoxDecoration(
-              color: widget.isOnline! ? AppColors.green : Colors.transparent,
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: widget.isOnline! ? c.surface1 : c.textMuted,
-                width: widget.isOnline! ? 1 : 1.2,
-              ),
-            ),
-          );
+        : null;
 
     return MouseRegion(
       onEnter: (_) => setState(() => _isHovered = true),
@@ -1023,63 +888,6 @@ class _NavItemState extends State<_NavItem> {
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-/// 局域网直连设备的只读状态行：仅展示“设备名 + 在线/离线”，不接选中态、
-/// 悬浮态、计数徽标。
-///
-/// 局域网下发（LinkManager.dispatch）是 fire-and-forget，对端任务状态没有
-/// 任何数据回流通道（不同于云端设备走 SSE 全量拉取 + 增量事件），
-/// [DownloadController.countForDevice]/[DownloadController.setDeviceFilter]
-/// 两个 API 都只读 DownloadController 内部的云端任务快照，对局域网指纹
-/// 永远是 0/空——做成可点击的筛选项只会呈现“点了没反应”的空壳。改成纯
-/// 展示行后，本文件里触发 setDeviceFilter 的调用点不会再出现局域网
-/// 指纹，pruneDeviceFilter（只按云端 remoteDevices 名册校验）也就不会再
-/// 把局域网指纹误判成“已失效的远程设备”回收——它本来就不会被选中。
-/// 行高/内边距/字号与 [_NavItem] 保持一致，在同一设备区块内视觉协调；
-/// 无悬浮/选中态，不涉及颜色过渡，天然不触发 no-lerp-from-transparent。
-class _LocalDeviceStatusRow extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final bool online;
-  final String statusLabel;
-
-  const _LocalDeviceStatusRow({
-    required this.icon,
-    required this.label,
-    required this.online,
-    required this.statusLabel,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final c = AppColors.of(context);
-    return Container(
-      height: 32,
-      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-      child: Row(
-        children: [
-          Icon(icon, size: 14, color: c.textSecondary),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              label,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: 12.5, color: c.textSecondary),
-            ),
-          ),
-          Text(
-            statusLabel,
-            style: TextStyle(
-              fontSize: 11,
-              color: online ? c.statusSuccess : c.textMuted,
-            ),
-          ),
-        ],
       ),
     );
   }

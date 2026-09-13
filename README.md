@@ -8,13 +8,15 @@
 
 *A blazing fast, multi-protocol download manager — the free & open-source IDM alternative.*
 
-[![Latest Release](https://img.shields.io/github/v/release/zerx-lab/FluxDown?style=flat-square&color=06b6d4&label=release)](https://github.com/zerx-lab/FluxDown/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/zerx-lab/FluxDown/total?style=flat-square&color=22c55e)](https://github.com/zerx-lab/FluxDown/releases)
+> **Fork notice:** This is a modified version of [zerx-lab/FluxDown](https://github.com/zerx-lab/FluxDown) by [SantaChains](https://github.com/SantaChains). Original © zerx-lab is retained. Licensed under AGPL-3.0. Corresponding Source (AGPL §13): https://github.com/SantaChains/FluxDown
+
+[![Latest Release](https://img.shields.io/github/v/release/SantaChains/FluxDown?style=flat-square&color=06b6d4&label=release)](https://github.com/SantaChains/FluxDown/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/SantaChains/FluxDown/total?style=flat-square&color=22c55e)](https://github.com/SantaChains/FluxDown/releases)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20NAS%20%7C%20Android-8b5cf6?style=flat-square)](#installation)
 [![Rust](https://img.shields.io/badge/engine-Rust-f74c00?style=flat-square&logo=rust)](native/engine)
 [![Flutter](https://img.shields.io/badge/UI-Flutter-02569B?style=flat-square&logo=flutter)](lib)
-[![MCP Server](https://glama.ai/mcp/servers/zerx-lab/FluxDown/badges/score.svg)](https://glama.ai/mcp/servers/zerx-lab/FluxDown)
+[![MCP Server](https://glama.ai/mcp/servers/SantaChains/FluxDown/badges/score.svg)](https://glama.ai/mcp/servers/SantaChains/FluxDown)
 
 [![Awesome Rust](https://img.shields.io/badge/Awesome-Rust-orange?logo=rust&style=flat-square)](https://github.com/rust-unofficial/awesome-rust#utilities)
 [![Awesome Windows](https://img.shields.io/badge/Awesome-Windows-0078D4?style=flat-square)](https://github.com/thechampagne/awesome-windows#utilities)
@@ -25,7 +27,7 @@
 [![Unraid CA](https://img.shields.io/badge/Unraid-CA-F15A2C?style=flat-square)](https://github.com/selfhosters/unRAID-CA-templates/blob/master/templates/fluxdown.xml)
 [![Chinese Indie Dev](https://img.shields.io/badge/Chinese%20Indie-Dev-ef4444?style=flat-square)](https://github.com/1c7/chinese-independent-developer)
 
-[**Website**](https://fluxdown.zerx.dev) · [**Download**](https://fluxdown.zerx.dev/#download) · [**Changelog**](https://fluxdown.zerx.dev/changelog) · [**FAQ**](https://fluxdown.zerx.dev/faq) · [**Feedback**](https://fluxdown.zerx.dev/feedback)
+[**GitHub**](https://github.com/SantaChains/FluxDown) · [**Releases**](https://github.com/SantaChains/FluxDown/releases) · [**Issues**](https://github.com/SantaChains/FluxDown/issues) · [**Based on zerx-lab/FluxDown**](https://github.com/zerx-lab/FluxDown)
 
 **English** | [简体中文](README.zh-CN.md)
 
@@ -73,7 +75,7 @@
 
 ## Installation
 
-Grab the latest build from [**GitHub Releases**](https://github.com/zerx-lab/FluxDown/releases/latest) or [**fluxdown.zerx.dev**](https://fluxdown.zerx.dev/#download):
+Grab the latest build from [**GitHub Releases**](https://github.com/SantaChains/FluxDown/releases/latest) or the [**fork repository**](https://github.com/SantaChains/FluxDown):
 
 | Platform | Packages |
 |---|---|
@@ -81,7 +83,7 @@ Grab the latest build from [**GitHub Releases**](https://github.com/zerx-lab/Flu
 | **macOS** (Intel / Apple Silicon) | `.dmg` · portable `.tar.gz` |
 | **Linux** (x64) | `.AppImage` · `.deb` · Arch `.pkg.tar.zst` · portable `.tar.gz` |
 | **Android** (arm64-v8a / armeabi-v7a / x86_64) | per-ABI `.apk` · universal `.apk` |
-| **NAS / Server** (headless, x64 / ARM64) | [Docker](https://ghcr.io/zerx-lab/fluxdown-server) · Synology DSM 6/7 `.spk` · QNAP `.qpkg` · OpenWrt `.ipk` · Unraid CA template · CasaOS / ZimaOS app store |
+| **NAS / Server** (headless, x64 / ARM64) | [Docker](https://ghcr.io/SantaChains/fluxdown-server) · Synology DSM 6/7 `.spk` · QNAP `.qpkg` · OpenWrt `.ipk` · Unraid CA template · CasaOS / ZimaOS app store |
 
 ### Browser Extension
 
@@ -161,7 +163,7 @@ flowchart TD
 
 ```shell
 # Clone the development branch (main = active development, stable = stable releases)
-git clone -b main https://github.com/zerx-lab/FluxDown.git
+git clone -b main https://github.com/SantaChains/FluxDown.git
 cd FluxDown
 
 # Check your environment
@@ -211,8 +213,7 @@ cargo test -p hub                    # FFI adapter tests
 
 ## Contributing & Community
 
-- **Bug reports / feature requests** — [GitHub Issues](https://github.com/zerx-lab/FluxDown/issues) or the in-app feedback dialog
-- **QQ Group** — [832143651](https://fluxdown.zerx.dev/qq-group)
+- **Bug reports / feature requests** — [GitHub Issues](https://github.com/SantaChains/FluxDown/issues) or the in-app feedback dialog
 
 Pull requests are welcome! Branch off `main` and target `main` — it is the development branch, while `stable` only tracks stable releases (maintainers advance it from `main`). Before submitting, please make sure:
 
@@ -226,11 +227,12 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow.
 ## License
 
 Distributed under the [GNU Affero General Public License v3.0](LICENSE).
+This is a modified fork of [zerx-lab/FluxDown](https://github.com/zerx-lab/FluxDown); original copyright © zerx-lab is retained. See [NOTICE](NOTICE) for modification attribution. Per AGPL §13, the Corresponding Source of this modified version is the [fork repository](https://github.com/SantaChains/FluxDown).
 
 <div align="center">
 
-**If FluxDown saves you time, consider giving it a Star — it helps more people discover the project.**
+**If this fork saves you time, consider giving it a Star — it helps more people discover the project.**
 
-Made by [zerx-lab](https://github.com/zerx-lab)
+Modified by [SantaChains](https://github.com/SantaChains) · Based on [FluxDown by zerx-lab](https://github.com/zerx-lab/FluxDown) (AGPL-3.0)
 
 </div>

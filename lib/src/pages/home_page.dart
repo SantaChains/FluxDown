@@ -17,11 +17,6 @@ import '../models/rss_provider.dart';
 import '../models/settings_provider.dart';
 import '../models/view_prefs.dart';
 import '../services/external_download_service.dart';
-import '../services/cloud/cdn_config_service.dart';
-import '../services/cloud/cdn_report_service.dart';
-import '../services/cloud/config_sync_service.dart';
-import '../services/cloud/remote_task_service.dart';
-import '../services/link/local_pairing_service.dart';
 import '../services/log_service.dart';
 import '../services/kv_store.dart';
 import '../services/notification_service.dart';
@@ -39,7 +34,6 @@ import '../widgets/detail_panel.dart';
 import '../widgets/group_detail_panel.dart';
 import '../widgets/status_bar.dart';
 import '../widgets/new_download_dialog.dart';
-import '../widgets/incoming_pairing_dialog.dart';
 import '../widgets/task_list_item.dart';
 import '../widgets/title_drag_area.dart';
 import 'settings_page.dart';
@@ -102,9 +96,6 @@ class _HomePageState extends State<HomePage> {
   // 主内容区最小宽度，保证 HeaderBar 不溢出
   static const double _mainMinWidth = 400;
 
-  /// 本地设备互联：入站配对核验弹窗是否正在显示，避免同一会话重复弹出。
-  bool _incomingPairingDialogOpen = false;
-
   @override
   void initState() {
     super.initState();
@@ -139,30 +130,6 @@ class _HomePageState extends State<HomePage> {
     PowerService.instance.bind(_controller, _settingsProvider);
     // 「任务完成后关机」服务（纯内存状态，重启不保留）
     ShutdownService.instance.bind(_controller);
-    // FluxCloud 配置同步：providers 就绪后接线；远端应用/失败均弹 toast。
-    ConfigSyncService.instance.onRemoteApplied = _onSyncRemoteApplied;
-    ConfigSyncService.instance.addListener(_onConfigSyncChanged);
-    unawaited(
-      ConfigSyncService.instance.attach(
-        settings: _settingsProvider,
-        theme: FluxDownApp.of(context),
-        locale: localeNotifier,
-      ),
-    );
-    // FluxCloud 跨设备任务协同：providers 就绪后接线，登录即开 SSE 长连回流进度。
-    unawaited(RemoteTaskService.instance.attach());
-    // FluxCloud CDN 聚合下载云端配置：登录即拉 + 12h 周期刷新，失败静默。
-    unawaited(CdnConfigService.instance.attach());
-    // FluxCloud CDN 众包遥测上报：常开，登录即上报一次 + 30min 周期，失败静默保留。
-    unawaited(CdnReportService.instance.attach());
-    // 本地设备互联（局域网配对，免账号）：与账号体系无关，启动即接线监听。
-    // 移动端不支持局域网直连（native/hub/build.rs 在 android/ios 上不编译
-    // hub_link，LocalPairingService.supported 恒为 false），显式跳过更
-    // 清晰——虽然 attach() 内部对 supported==false 也会 early return。
-    if (LocalPairingService.instance.supported) {
-      unawaited(LocalPairingService.instance.attach());
-      LocalPairingService.instance.addListener(_onLocalPairingChanged);
-    }
     // 首次启动 .torrent 文件关联提示（仅 Windows）
     if (Platform.isWindows) {
       _settingsProvider.addListener(_onSettingsLoadedForAssocPrompt);
@@ -248,58 +215,6 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  /// 远端设备同步条目被实际应用后弹 toast（[ConfigSyncService.onRemoteApplied]）。
-  void _onSyncRemoteApplied(int count, String? deviceName) {
-    if (!mounted) return;
-    FluxSonner.of(context).show(
-      ShadToast(
-        title: Text(
-          currentS.cloudSyncAppliedToast(
-            count,
-            deviceName ?? currentS.cloudSyncOtherDevice,
-          ),
-        ),
-        duration: const Duration(seconds: 3),
-      ),
-    );
-  }
-
-  /// 本机作为被添加方收到配对请求（`incomingPairing` 非空）时弹出核验框
-  /// （SAS + 60s 倒计时 + 接受/拒绝，见 incoming_pairing_dialog.dart）；
-  /// 弹窗自身监听同一服务、会话失效时自动关闭，这里只负责按需打开且防重入。
-  void _onLocalPairingChanged() {
-    if (!mounted || _incomingPairingDialogOpen) return;
-    if (LocalPairingService.instance.incomingPairing == null) return;
-    _incomingPairingDialogOpen = true;
-    showIncomingPairingDialog(context).then((_) {
-      _incomingPairingDialogOpen = false;
-      // 弹窗展示期间到达的新入站请求会覆盖服务层的 incomingPairing，但
-      // notifyListeners 早于本 .then 回调触发时被上面的重入门拦掉，弹窗
-      // 关闭后再无人触发新弹窗——并发第二个入站配对会被静默吞掉（两台设备
-      // 都失败且无提示）。这里补一次主动检查，把期间积压的新会话接上。
-      _onLocalPairingChanged();
-    });
-  }
-
-  /// 同步失败态弹 toast；同一条错误文案去重，避免退避重试期间反复弹出。
-  String? _lastSyncErrorNotified;
-  void _onConfigSyncChanged() {
-    if (!mounted) return;
-    final sync = ConfigSyncService.instance;
-    if (sync.status != CloudSyncStatus.error || sync.lastError == null) {
-      _lastSyncErrorNotified = null;
-      return;
-    }
-    if (sync.lastError == _lastSyncErrorNotified) return;
-    _lastSyncErrorNotified = sync.lastError;
-    FluxSonner.of(context).show(
-      ShadToast.destructive(
-        title: Text(currentS.cloudSyncFailedToast(sync.lastError!)),
-        duration: const Duration(seconds: 4),
-      ),
-    );
-  }
-
   /// 浏览器扩展触发下载时，若当前在设置页则自动切回首页。
   void _navigateToHomeFromExternal() {
     if (!mounted) return;
@@ -322,9 +237,6 @@ class _HomePageState extends State<HomePage> {
     HardwareKeyboard.instance.removeHandler(_onGlobalKey);
     _settingsProvider.removeListener(_checkSidebarVisibility);
     _settingsProvider.removeListener(_onSettingsLoadedForAssocPrompt);
-    ConfigSyncService.instance.removeListener(_onConfigSyncChanged);
-    ConfigSyncService.instance.onRemoteApplied = null;
-    LocalPairingService.instance.removeListener(_onLocalPairingChanged);
     _pluginProvider.removeListener(_onPluginProviderChanged);
     _dupTorrentSub?.cancel();
     _pluginProvider.dispose();
@@ -468,8 +380,6 @@ class _HomePageState extends State<HomePage> {
     // 通知服务内部做 800ms 防抖合批（多文件 → "N 个文件已下载"），
     // 此处无需再做汇总聚合。
     NotificationService.instance.showDownloadComplete(task);
-    // CDN 遥测事件驱动上报：任务完成 → 10s 去抖后上传本轮样本。
-    CdnReportService.instance.notifyTaskCompleted();
   }
 
   /// 「修改线程数」结果提示。成功 → 普通 toast；被拒（任务非暂停态）→

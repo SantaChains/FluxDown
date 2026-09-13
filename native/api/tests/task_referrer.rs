@@ -40,6 +40,7 @@ fn task_dto_json_carries_referrer() {
         rss_source_id: String::new(),
         origin_url: String::new(),
         auto_route: String::new(),
+        mirror_urls: String::new(),
     };
     let dto = TaskDto::from(info);
     assert_eq!(dto.referrer, "https://example.com/page");

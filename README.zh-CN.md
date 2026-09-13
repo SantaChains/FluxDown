@@ -8,13 +8,15 @@
 
 *极速多协议下载管理器 —— 免费开源的 IDM 替代品。*
 
-[![Latest Release](https://img.shields.io/github/v/release/zerx-lab/FluxDown?style=flat-square&color=06b6d4&label=release)](https://github.com/zerx-lab/FluxDown/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/zerx-lab/FluxDown/total?style=flat-square&color=22c55e)](https://github.com/zerx-lab/FluxDown/releases)
+> **分支说明：** 本仓库是 [zerx-lab/FluxDown](https://github.com/zerx-lab/FluxDown) 的改版分支，由 [SantaChains](https://github.com/SantaChains) 维护。原始 © zerx-lab 版权保留。基于 AGPL-3.0 许可。对应源代码（AGPL §13）：https://github.com/SantaChains/FluxDown
+
+[![Latest Release](https://img.shields.io/github/v/release/SantaChains/FluxDown?style=flat-square&color=06b6d4&label=release)](https://github.com/SantaChains/FluxDown/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/SantaChains/FluxDown/total?style=flat-square&color=22c55e)](https://github.com/SantaChains/FluxDown/releases)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20NAS%20%7C%20Android-8b5cf6?style=flat-square)](#安装)
 [![Rust](https://img.shields.io/badge/engine-Rust-f74c00?style=flat-square&logo=rust)](native/engine)
 [![Flutter](https://img.shields.io/badge/UI-Flutter-02569B?style=flat-square&logo=flutter)](lib)
-[![MCP Server](https://glama.ai/mcp/servers/zerx-lab/FluxDown/badges/score.svg)](https://glama.ai/mcp/servers/zerx-lab/FluxDown)
+[![MCP Server](https://glama.ai/mcp/servers/SantaChains/FluxDown/badges/score.svg)](https://glama.ai/mcp/servers/SantaChains/FluxDown)
 
 [![Awesome Rust](https://img.shields.io/badge/Awesome-Rust-orange?logo=rust&style=flat-square)](https://github.com/rust-unofficial/awesome-rust#utilities)
 [![Awesome Windows](https://img.shields.io/badge/Awesome-Windows-0078D4?style=flat-square)](https://github.com/thechampagne/awesome-windows#utilities)
@@ -25,7 +27,7 @@
 [![Unraid CA](https://img.shields.io/badge/Unraid-CA-F15A2C?style=flat-square)](https://github.com/selfhosters/unRAID-CA-templates/blob/master/templates/fluxdown.xml)
 [![Chinese Indie Dev](https://img.shields.io/badge/Chinese%20Indie-Dev-ef4444?style=flat-square)](https://github.com/1c7/chinese-independent-developer)
 
-[**官网**](https://fluxdown.zerx.dev) · [**下载**](https://fluxdown.zerx.dev/#download) · [**更新日志**](https://fluxdown.zerx.dev/changelog) · [**常见问题**](https://fluxdown.zerx.dev/faq) · [**反馈**](https://fluxdown.zerx.dev/feedback)
+[**GitHub**](https://github.com/SantaChains/FluxDown) · [**Releases**](https://github.com/SantaChains/FluxDown/releases) · [**Issues**](https://github.com/SantaChains/FluxDown/issues) · [**基于 zerx-lab/FluxDown**](https://github.com/zerx-lab/FluxDown)
 
 [English](README.md) | **简体中文**
 

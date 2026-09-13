@@ -334,6 +334,8 @@ fn resolve_ftp_info_sync(ftp_url: &FtpUrl, proxy: &ProxyConfig) -> Result<FileIn
         last_modified: String::new(),
         // FTP has no Content-Encoding concept.
         content_encoding_compressed: false,
+        // FTP has no HTTP Link header.
+        mirror_urls: Vec::new(),
     })
 }
 

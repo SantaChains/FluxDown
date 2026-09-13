@@ -31,6 +31,11 @@ pub struct CreateTask {
     /// Empty = skip verification.
     #[serde(default)]
     pub checksum: String,
+    /// 多镜像聚合的其余镜像 URL（不含 `url` 主源；空 = 无镜像）。引擎
+    /// 构造镜像节点池跨 host 分流（与 CDN IP 聚合互斥）；`.metalink`/
+    /// `.meta4` 直链无需传——引擎自动抓取清单回填。
+    #[serde(default)]
+    pub mirror_urls: Vec<String>,
     /// Ignore HTTPS certificate errors for this task. Secure default: false.
     #[serde(default)]
     pub ignore_tls_errors: bool,
@@ -73,6 +78,9 @@ pub struct UrlEntry {
     /// Format: "algo=hexhash", e.g. "sha-256=abc123..." or "md5=d41d8c...".
     /// Empty = skip verification.
     pub checksum: String,
+    /// 其余镜像 URL（不含 `url` 主源；空 = 无镜像）。
+    #[serde(default)]
+    pub mirror_urls: Vec<String>,
     /// 音频轨 URL（通用「视频轨+音频轨」离散下载对语义）。
     /// 空 = 普通单 URL 下载；非空 = url 视作视频轨，本字段视作音频轨，
     /// 引擎分别下载两路后 mux 合并。

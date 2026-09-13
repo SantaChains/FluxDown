@@ -930,7 +930,7 @@ class S {
       _r('addDeviceAccountSynced', {'account': account});
   String get addDeviceAccountFooter => _r('addDeviceAccountFooter');
 
-  // 入站配对核验（本机作为被添加方时的核验 UI，见 incoming_pairing_dialog.dart）
+  // 入站配对核验（本机作为被添加方时的核验 UI）
   String get incomingPairingTitle => _r('incomingPairingTitle');
   String get incomingPairingHint => _r('incomingPairingHint');
   String incomingPairingFrom(String device) =>

@@ -255,6 +255,16 @@ pub enum EngineEvent {
     /// 时拉一次」。dispatcher 侧已按 500ms 节流 + 尾随补发。
     /// hub → `WebhookDeliveriesDelta` 信号；server → WS `webhookDeliveriesChanged`。
     WebhookDeliveriesChanged(Vec<crate::webhook::WebhookDelivery>),
+
+    /// BT 任务 swarm 状态快照——P2P 面板的数据源。仅 BT 任务（Live 状态）
+    /// 有非零字段；HTTP/FTP/HLS/DASH 任务不被采集。宿主据此刷新 P2P 详情
+    /// 面板（peer 数 / 下载·上传速率 / 分享比 / 已上传字节 / 剩余时间）。
+    /// hub → `BtSwarmStats` 信号；server → WS `btSwarmStats`。
+    BtSwarmStats {
+        task_id: String,
+        /// 聚合后的 swarm 状态。字段语义见 [`crate::p2p_stats::SwarmStats`]。
+        stats: crate::p2p_stats::SwarmStats,
+    },
 }
 
 /// 引擎事件的接收端,由宿主实现并注入 [`crate::Engine`]。

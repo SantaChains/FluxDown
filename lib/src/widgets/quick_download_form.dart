@@ -138,7 +138,7 @@ class QuickQueueOption {
 
 /// 表单可选目标设备（[QuickDownloadFormHost.devices] 的元素）。
 ///
-/// 与 `CloudDevice` 解耦：独立小窗引擎中不存在 CloudAuthService，
+/// 与设备名册解耦：独立小窗引擎中不存在 LocalPairingService，
 /// 设备名册经载荷 JSON 注入后以本类型还原。
 class QuickDeviceOption {
   final String deviceId;

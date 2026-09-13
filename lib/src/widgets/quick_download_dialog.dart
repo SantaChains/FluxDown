@@ -5,8 +5,8 @@ import '../i18n/locale_provider.dart';
 import '../models/download_controller.dart';
 import '../models/download_queue.dart';
 import '../models/settings_provider.dart';
-import '../services/cloud/cloud_auth_service.dart';
 import '../services/file_picker_service.dart';
+import '../services/link/local_pairing_service.dart';
 import '../services/quick_download_submitter.dart';
 import '../services/resolve_preview_client.dart';
 import '../services/system_proxy_status.dart';
@@ -285,12 +285,12 @@ class _MainWindowFormHost implements QuickDownloadFormHost {
 
   @override
   List<QuickDeviceOption> get devices => [
-    for (final d in CloudAuthService.instance.remoteDevices)
+    for (final d in LocalPairingService.instance.localDevices)
       QuickDeviceOption(
-        deviceId: d.deviceId,
+        deviceId: d.fingerprint,
         name: d.name,
         platform: d.platform,
-        isOnline: d.isOnline,
+        isOnline: d.online,
       ),
   ];
 

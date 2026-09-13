@@ -803,14 +803,14 @@ const UI_REPORT_INTERVAL_MS: u128 = 200;
 const MAX_RETRIES: u32 = 5;
 const RETRY_BASE_DELAY: Duration = Duration::from_secs(2);
 
-/// 多 CDN 钉定节点租约的段内重试预算（收紧版 MAX_RETRIES）。
+/// failover 节点租约（CDN 钉定 / 镜像）的段内重试预算（收紧版 MAX_RETRIES）。
 ///
 /// SYS 单节点时段内重试是唯一自愈手段，值得 5 次 × 指数退避（~80s）的耐心；
-/// 钉定节点死亡时同样耐心意味着 ~30s×3 次才被踢——架空快速故障切换
-///（#127 主诉求之一）。钉定租约上抛廉价：coordinator 立即回收段重派，
+/// failover 节点死亡时同样耐心意味着 ~30s×3 次才被踢——架空快速故障切换
+///（#127 主诉求之一）。failover 租约上抛廉价：coordinator 立即回收段重派，
 /// 下一次租借自然落到健康节点，故只留一次带短退避的就地重试（吸收单次
 /// 网络抖动），失败即上抛交给节点池切换。
-const PINNED_NODE_MAX_RETRIES: u32 = 2;
+const FAILOVER_NODE_MAX_RETRIES: u32 = 2;
 
 /// 单个 chunk 的读取超时（stall detection）。如果超过此时间没有收到任何数据，
 /// 视为连接停滞，返回错误触发 retry 机制（断开旧连接，用 Range 请求从断点续传）。
@@ -4063,21 +4063,25 @@ fn spawn_worker(
             // 降权/踢除的节点——段间节点切换零新增状态机。
             let lease = nodes.lease();
             let seg_started = Instant::now();
+            // 镜像租约换段级 URL（Mirror 节点的实际下载地址）；CDN 钉定
+            // 与 SYS 沿用任务主 URL（钉定只改连接端点不改请求目标）。
+            let seg_url: &str = lease.url.as_deref().unwrap_or(&url);
 
             let result = do_segment_with_retry(
                 &task_id,
                 assignment.seg_index,
-                &url,
+                seg_url,
                 &dest,
                 assignment.seg_start,
                 assignment.actual_start,
                 assignment.seg_end,
                 assignment.open_ended,
                 assignment.no_range,
-                // 钉定租约收紧段内重试预算：失败快速上抛交给节点池切换；
-                // SYS 租约保持原 5 次预算（唯一数据流，耐心自愈 == 现状）。
-                if lease.is_pinned() {
-                    PINNED_NODE_MAX_RETRIES
+                // failover 租约（钉定/镜像）收紧段内重试预算：失败快速上抛
+                // 交给节点池切换；SYS 租约保持原 5 次预算（唯一数据流，
+                // 耐心自愈 == 现状）。
+                if lease.is_failover() {
+                    FAILOVER_NODE_MAX_RETRIES
                 } else {
                     MAX_RETRIES
                 },
@@ -4117,7 +4121,7 @@ fn spawn_worker(
                 Err(DownloadError::Cancelled) => {}
                 Err(e) => nodes.report(&lease, 0, seg_started.elapsed(), Err(e)),
             }
-            let lease_pinned = lease.is_pinned();
+            let lease_failover = lease.is_failover();
             let lease_desc = lease.describe();
             drop(lease);
 
@@ -4142,11 +4146,12 @@ fn spawn_worker(
                     // 结束时关闭 channel，recv 返回 None 自然退出）。其余错误维持
                     // 原语义：报告后退出。
                     //
-                    // 多节点池的【钉定】租约上，节点可归因错误（连接失败/超时/
-                    // 停滞/validator 不一致/HTTP 拒绝）翻译为 CdnNodeFailed
-                    //（同为可恢复：coordinator 回收段重派，绝不升级为任务失败）。
-                    // SYS 租约的错误保持原样——语义与无聚合时完全一致。
-                    let e = if lease_pinned && crate::cdn::is_node_attributable(&e) {
+                    // 多节点池的【failover】（钉定/镜像）租约上，节点可归因错误
+                    //（连接失败/超时/停滞/validator 不一致/HTTP 拒绝）翻译为
+                    // CdnNodeFailed（同为可恢复：coordinator 回收段重派，绝不
+                    // 升级为任务失败）。SYS 租约的错误保持原样——语义与无聚合
+                    // 时完全一致。
+                    let e = if lease_failover && crate::cdn::is_node_attributable(&e) {
                         log_info!(
                             "[worker {}] task {} seg {} 节点 {} 可归因失败，翻译为 CdnNodeFailed: {}",
                             worker_id,
@@ -4210,8 +4215,8 @@ async fn do_segment_with_retry(
     mut seg_end: i64,
     open_ended: bool,
     no_range: bool,
-    // 段内瞬时错误重试预算：SYS 租约 = MAX_RETRIES，钉定租约 =
-    // PINNED_NODE_MAX_RETRIES（快速上抛交给节点池切换）。
+    // 段内瞬时错误重试预算：SYS 租约 = MAX_RETRIES，failover 租约
+    //（钉定/镜像）= FAILOVER_NODE_MAX_RETRIES（快速上抛交给节点池切换）。
     max_retries: u32,
     client: &Client,
     cancel: &CancellationToken,

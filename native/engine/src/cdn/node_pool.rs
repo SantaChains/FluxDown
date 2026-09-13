@@ -3,6 +3,12 @@
 //! 池内 node[0] 恒为 **SYS 节点**（无钉定、走系统 DNS 的任务级 client）——
 //! 所有钉定节点被踢除后自动退到 SYS，任何情况下不比现状差（方案不变量 1）。
 //!
+//! 两种聚合风味共用同一套调度/踢除/EWMA 机制（设计：多镜像 metalink §4.1）：
+//! - **CDN IP 聚合**（[`NodePool::multi`]）：同 host 多 IP 钉定，TLS 证书锚；
+//! - **镜像聚合**（[`NodePool::mirrors`]）：同文件跨 host 多 URL，node[0] =
+//!   主 URL（SYS 语义）+ 每镜像一个独立非钉定 client 槽位。两种风味互斥
+//!   （分流门在 `finish_pool` 调用点，镜像优先），同一任务的分流策略只有一个。
+//!
 //! 调度（[`NodePool::lease`]）全部确定性、无随机：
 //! - **per-节点并发上限** `cap = ceil(活跃租约数 / 存活节点数)` 强制分散，
 //!   避免全部 worker 贪心涌向当前最优节点（aria2#808：per-IP 限速下分散
@@ -10,10 +16,11 @@
 //! - 上限内选 `score = EWMA(吞吐) × 0.5^连续失败数` 最高者；同分取租约更少、
 //!   编号更小者。无历史数据的新节点给中位初值（保证冷节点被探索）；
 //! - 踢除：连续失败 ≥3 或 validator 不一致（立即）→ 本任务内不再选中；
-//!   跨任务由持久化健康度 TTL 衰减自然恢复。
+//!   跨任务由持久化健康度 TTL 衰减自然恢复（镜像节点不持久化，仅任务内）。
 //!
 //! 聚合熔断（方案 §3.5）：任务内被踢节点数 > 存活钉定节点数 → 判定该 host
 //! 不适合聚合，写 [`super::health`] 熔断标记（24h），本任务退 SYS 继续。
+//! 镜像池不做熔断（无「host 不适合聚合」的反例语义，镜像全灭退主 URL 即兜底）。
 
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex as StdMutex};
@@ -54,19 +61,47 @@ pub struct ClientTemplate {
     pub user_agent: String,
 }
 
+/// 池内单节点的接入端点（CDN 钉定 IP / 镜像 URL / 系统兜底的三态泛化）。
+#[derive(Clone, PartialEq)]
+enum NodeEndpoint {
+    /// 系统解析兜底：CDN 池的任务 client / 镜像池的主 URL client，无钉定。
+    System,
+    /// CDN 钉定 IP（同 host 多 IP 聚合；TLS SNI + host 钉定直连）。
+    PinnedIp(IpAddr),
+    /// 镜像 URL（跨 host 聚合；懒建独立非钉定 client，按 URL 自带 host 连接）。
+    Mirror(String),
+}
+
+impl NodeEndpoint {
+    /// 事件/诊断展示名（`CdnNodeInfo.ip` / `TaskCdnEvent.ip` 同源）。
+    fn display(&self) -> String {
+        match self {
+            NodeEndpoint::System => "SYS".to_string(),
+            NodeEndpoint::PinnedIp(ip) => ip.to_string(),
+            NodeEndpoint::Mirror(url) => url.clone(),
+        }
+    }
+
+    /// 是否可踢除的非兜底节点（CDN 钉定 / 镜像）。SYS 永不踢。
+    fn is_failover(&self) -> bool {
+        !matches!(self, NodeEndpoint::System)
+    }
+}
+
 /// 池内单节点。
 struct NodeSlot {
-    /// `None` = SYS 节点（系统 DNS，无钉定）。
-    ip: Option<IpAddr>,
+    endpoint: NodeEndpoint,
     /// 常驻 client（keep-alive 连接池挂在上面）。SYS 节点构造时注入；
-    /// 钉定节点懒建（首次被选中时 `build_pinned_client`）。
+    /// 钉定/镜像节点懒建（首次被选中时 `build_pinned_client` /
+    /// `build_client_with_tls_policy`）。
     client: Option<Client>,
     ewma_bps: f64,
     fail_streak: u32,
     kicked: bool,
     /// 当前未归还的租约数（lease 递增，NodeLease Drop 递减）。
     outstanding: u32,
-    /// 候选来源标记（`resolver::CandidateSet::origins`；SYS 节点为空串）。
+    /// 候选来源标记（`resolver::CandidateSet::origins`；镜像节点为
+    /// `"mirror"`；SYS 节点为空串）。
     origin: String,
     /// 本任务经该节点累计下载的字节数（喂 `kind="summary"` 事件）。
     bytes_done: u64,
@@ -109,7 +144,11 @@ pub struct NodeLease {
     pool: Arc<NodePool>,
     node_id: usize,
     client: Client,
-    ip: Option<IpAddr>,
+    endpoint: NodeEndpoint,
+    /// 镜像租约的实际下载 URL（仅 [`NodeEndpoint::Mirror`] 非空；其余
+    /// 风味沿用任务主 URL——CDN 钉定只改连接端点不改请求目标）。
+    /// worker 侧：`lease.url.as_deref().unwrap_or(&url)`。
+    pub url: Option<String>,
 }
 
 impl NodeLease {
@@ -117,17 +156,16 @@ impl NodeLease {
         &self.client
     }
 
-    /// 是否钉定节点（非 SYS）。错误翻译（`CdnNodeFailed`）仅对钉定节点生效。
-    pub fn is_pinned(&self) -> bool {
-        self.ip.is_some()
+    /// 是否非兜底节点（CDN 钉定 / 镜像）：段内重试预算收紧与
+    /// `CdnNodeFailed` 错误翻译只对这类租约生效（快速上抛交给节点池切换）。
+    /// SYS 租约保持现状语义（唯一数据流，耐心自愈）。
+    pub fn is_failover(&self) -> bool {
+        self.endpoint.is_failover()
     }
 
     /// 诊断用节点描述。
     pub fn describe(&self) -> String {
-        match self.ip {
-            Some(ip) => ip.to_string(),
-            None => "SYS".to_string(),
-        }
+        self.endpoint.display()
     }
 }
 
@@ -160,7 +198,7 @@ impl NodePool {
             sink: None,
             inner: StdMutex::new(PoolInner {
                 slots: vec![NodeSlot {
-                    ip: None,
+                    endpoint: NodeEndpoint::System,
                     client: Some(client),
                     ewma_bps: DEFAULT_EWMA_BPS,
                     fail_streak: 0,
@@ -192,7 +230,7 @@ impl NodePool {
         sink: Option<Arc<dyn EventSink>>,
     ) -> Arc<Self> {
         let mut slots = vec![NodeSlot {
-            ip: None,
+            endpoint: NodeEndpoint::System,
             client: Some(task_client),
             ewma_bps: DEFAULT_EWMA_BPS,
             fail_streak: 0,
@@ -204,7 +242,7 @@ impl NodePool {
         for ip in candidates {
             let prior = super::health::lookup_ewma(host, ip);
             slots.push(NodeSlot {
-                ip: Some(ip),
+                endpoint: NodeEndpoint::PinnedIp(ip),
                 client: None,
                 ewma_bps: prior.unwrap_or(DEFAULT_EWMA_BPS),
                 fail_streak: 0,
@@ -229,6 +267,91 @@ impl NodePool {
         })
     }
 
+    /// 镜像池（与 [`Self::multi`] 对偶的另一种聚合风味）：node[0] = 主 URL
+    /// （SYS 语义，任务 client；metalink 主镜像或用户原始 URL），其余每镜像
+    /// 一个 Mirror 槽位（懒建独立非钉定 client，各自 DNS/连接池）。
+    ///
+    /// 与 CDN 池的差异：
+    /// - **不持久化镜像健康度**（跨任务镜像集合不稳定，持久化会污染
+    ///   `cdn_node_health` 的 `(host, ip)` 语义）→ db=None，仅任务内 EWMA；
+    /// - **不做聚合熔断**（无「host 不适合聚合」的反例语义，镜像全灭退主
+    ///   URL 即兜底）→ `no_aggregate_recorded` 直接置位，`check_breaker` 短路；
+    /// - `host` 填主 URL 的 host（事件归属）；origin 统一 `"mirror"`
+    ///   （metalink location 归因待 wire 携带后启用）。
+    ///
+    /// `mirror_urls` 应已排除主 URL 本身（落库语义即「不含主源」）；本构造
+    /// 内部再做一次防御性去重。发一条 `kind="pool"` 就绪事件（镜像清单，
+    /// UI 详情面板零改动即可显示）。
+    pub fn mirrors(
+        template: ClientTemplate,
+        host: &str,
+        mirror_urls: Vec<String>,
+        task_client: Client,
+        task_id: &str,
+        sink: Option<Arc<dyn EventSink>>,
+    ) -> Arc<Self> {
+        let mut seen = std::collections::HashSet::new();
+        let mut slots = vec![NodeSlot {
+            endpoint: NodeEndpoint::System,
+            client: Some(task_client),
+            ewma_bps: DEFAULT_EWMA_BPS,
+            fail_streak: 0,
+            kicked: false,
+            outstanding: 0,
+            origin: String::new(),
+            bytes_done: 0,
+        }];
+        for url in mirror_urls {
+            if url.is_empty() || !seen.insert(url.clone()) {
+                continue;
+            }
+            slots.push(NodeSlot {
+                endpoint: NodeEndpoint::Mirror(url),
+                client: None,
+                ewma_bps: DEFAULT_EWMA_BPS,
+                fail_streak: 0,
+                kicked: false,
+                outstanding: 0,
+                origin: "mirror".to_string(),
+                bytes_done: 0,
+            });
+        }
+        let mirror_count = slots.len() - 1;
+        let pool = Arc::new(Self {
+            host: host.to_string(),
+            template: Some(template),
+            db: None,
+            task_id: task_id.to_string(),
+            sink: sink.clone(),
+            inner: StdMutex::new(PoolInner {
+                slots,
+                no_aggregate_recorded: true,
+                last_leases_emit: None,
+                last_leases_sig: Vec::new(),
+            }),
+        });
+        if let Some(sink) = sink {
+            let nodes: Vec<crate::model::CdnNodeInfo> = pool
+                .node_stats()
+                .into_iter()
+                .filter(|n| n.ip != "SYS")
+                .collect();
+            sink.emit(EngineEvent::TaskCdnEvent {
+                task_id: task_id.to_string(),
+                kind: "pool".to_string(),
+                host: host.to_string(),
+                nodes,
+                ip: String::new(),
+                reason: "mirrors".to_string(),
+                candidates: mirror_count as i32,
+                alive: mirror_count as i32,
+                cap: mirror_count as i32,
+                auto_cap: false,
+            });
+        }
+        pool
+    }
+
     /// 是否多节点池（含 ≥1 个钉定槽位，无论是否已被踢）。
     pub fn is_multi(&self) -> bool {
         self.inner
@@ -237,15 +360,15 @@ impl NodePool {
             .unwrap_or(false)
     }
 
-    /// 存活钉定节点数（诊断/测试用）。
-    pub fn alive_pinned(&self) -> usize {
+    /// 存活的非兜底节点数（CDN 钉定 / 镜像；诊断/测试用）。
+    pub fn alive_failover(&self) -> usize {
         self.inner
             .lock()
             .map(|inner| {
                 inner
                     .slots
                     .iter()
-                    .filter(|s| s.ip.is_some() && !s.kicked)
+                    .filter(|s| s.endpoint.is_failover() && !s.kicked)
                     .count()
             })
             .unwrap_or(0)
@@ -268,7 +391,7 @@ impl NodePool {
         };
         inner.no_aggregate_recorded = true;
         for slot in &mut inner.slots {
-            if slot.ip.is_some() {
+            if slot.endpoint.is_failover() {
                 slot.kicked = true;
             }
         }
@@ -293,30 +416,38 @@ impl NodePool {
             let lease = loop {
                 let chosen = Self::pick(&inner.slots);
                 let slot = &mut inner.slots[chosen];
-                // 懒建 pinned client（SYS 的 client 恒存在）。
+                // 懒建节点 client（SYS 的 client 恒存在）：CDN 钉定 →
+                // host+IP 钉定；镜像 → 非钉定普通 client（按 URL 自带
+                // host 连接，各自 DNS/连接池）。
                 if slot.client.is_none() {
-                    let built = self.template.as_ref().and_then(|t| {
-                        slot.ip.map(|ip| {
-                            crate::downloader::build_pinned_client(
+                    let built = self.template.as_ref().and_then(|t| match &slot.endpoint {
+                        NodeEndpoint::System => None,
+                        NodeEndpoint::PinnedIp(ip) => Some(crate::downloader::build_pinned_client(
+                            &t.proxy,
+                            &t.user_agent,
+                            false,
+                            &self.host,
+                            *ip,
+                        )),
+                        NodeEndpoint::Mirror(_) => {
+                            Some(crate::downloader::build_client_with_tls_policy(
                                 &t.proxy,
                                 &t.user_agent,
                                 false,
-                                &self.host,
-                                ip,
-                            )
-                        })
+                            ))
+                        }
                     });
                     match built {
                         Some(Ok(client)) => slot.client = Some(client),
                         _ => {
                             log_info!(
-                                "[cdn-pool] host {} 节点 {:?} pinned client 构建失败，踢除",
+                                "[cdn-pool] host {} 节点 {} client 构建失败，踢除",
                                 self.host,
-                                slot.ip
+                                slot.endpoint.display()
                             );
                             slot.kicked = true;
-                            if let Some(ip) = slot.ip {
-                                events.push(self.kick_event(ip, "build", 0));
+                            if slot.endpoint.is_failover() {
+                                events.push(self.kick_event(&slot.endpoint, "build", 0));
                             }
                             if let Some(evt) = self.check_breaker(&mut inner) {
                                 events.push(evt);
@@ -331,11 +462,16 @@ impl NodePool {
                     // 不可达（上方已保证）；防御性回退 SYS。
                     continue;
                 };
+                let url = match &slot.endpoint {
+                    NodeEndpoint::Mirror(url) => Some(url.clone()),
+                    _ => None,
+                };
                 break NodeLease {
                     pool: self.clone(),
                     node_id: chosen,
                     client,
-                    ip: slot.ip,
+                    endpoint: slot.endpoint.clone(),
+                    url,
                 };
             };
             // 节点并发分布快照（节流 + 变化检测；详情面板「日志」Tab）。
@@ -374,7 +510,7 @@ impl NodePool {
             .iter()
             .filter(|s| !s.kicked || s.outstanding > 0)
             .map(|s| crate::model::CdnNodeInfo {
-                ip: s.ip.map_or_else(|| "SYS".to_string(), |ip| ip.to_string()),
+                ip: s.endpoint.display(),
                 origin: s.origin.clone(),
                 bytes: s.bytes_done.min(i64::MAX as u64) as i64,
                 ewma_bps: s.ewma_bps as i64,
@@ -406,14 +542,14 @@ impl NodePool {
     }
 
     /// 构造一条 `kind="kick"` 事件（`count` = 连续失败次数，validator/build
-    /// 路径为 0）。
-    fn kick_event(&self, ip: IpAddr, reason: &str, count: u32) -> EngineEvent {
+    /// 路径为 0）。`ip` 字段为节点展示名（CDN 钉定 IP / 镜像 URL）。
+    fn kick_event(&self, node: &NodeEndpoint, reason: &str, count: u32) -> EngineEvent {
         EngineEvent::TaskCdnEvent {
             task_id: self.task_id.clone(),
             kind: "kick".to_string(),
             host: self.host.clone(),
             nodes: Vec::new(),
-            ip: ip.to_string(),
+            ip: node.display(),
             reason: reason.to_string(),
             candidates: count as i32,
             alive: 0,
@@ -497,12 +633,16 @@ impl NodePool {
                     if bytes >= MIN_SAMPLE_BYTES && !elapsed.is_zero() {
                         let rate = bytes as f64 / elapsed.as_secs_f64();
                         slot.ewma_bps = (1.0 - EWMA_ALPHA) * slot.ewma_bps + EWMA_ALPHA * rate;
-                        if let (Some(ip), Some(db)) = (slot.ip, self.db.as_ref()) {
-                            super::health::record_ewma(&self.host, ip, slot.ewma_bps, db);
+                        // 健康度/遥测持久化仅 CDN 钉定节点（镜像不持久化：
+                        // 跨任务镜像集合不稳定，见 mirrors() 文档）。
+                        if let (NodeEndpoint::PinnedIp(ip), Some(db)) =
+                            (&slot.endpoint, self.db.as_ref())
+                        {
+                            super::health::record_ewma(&self.host, *ip, slot.ewma_bps, db);
                             // P2 遥测：段吞吐样本（仅钉定节点——SYS 无法归因 IP）。
                             super::telemetry::record_segment(
                                 &self.host,
-                                ip,
+                                *ip,
                                 Some(rate as u64),
                                 true,
                                 db,
@@ -513,15 +653,16 @@ impl NodePool {
                 Err(e) => {
                     slot.fail_streak += 1;
                     slot.ewma_bps *= 0.5;
-                    let ip = slot.ip;
-                    let immediate = matches!(e, DownloadError::VersionChanged(_));
-                    let should_kick =
-                        ip.is_some() && (immediate || slot.fail_streak >= KICK_STREAK);
-                    if let (Some(ip), Some(db)) = (ip, self.db.as_ref()) {
-                        super::health::record_ewma(&self.host, ip, slot.ewma_bps, db);
+                    let failover = slot.endpoint.is_failover();
+                    if let (NodeEndpoint::PinnedIp(ip), Some(db)) =
+                        (&slot.endpoint, self.db.as_ref())
+                    {
+                        super::health::record_ewma(&self.host, *ip, slot.ewma_bps, db);
                         // P2 遥测：节点失败样本。
-                        super::telemetry::record_segment(&self.host, ip, None, false, db);
+                        super::telemetry::record_segment(&self.host, *ip, None, false, db);
                     }
+                    let immediate = matches!(e, DownloadError::VersionChanged(_));
+                    let should_kick = failover && (immediate || slot.fail_streak >= KICK_STREAK);
                     if should_kick {
                         slot.kicked = true;
                         let streak = slot.fail_streak;
@@ -535,13 +676,12 @@ impl NodePool {
                                 format!("连续失败 {streak}")
                             }
                         );
-                        if let Some(ip) = ip {
-                            events.push(if immediate {
-                                self.kick_event(ip, "validator", 0)
-                            } else {
-                                self.kick_event(ip, "fail", streak)
-                            });
-                        }
+                        // should_kick 已蕴含 failover（SYS 永不踢），无需再判。
+                        events.push(if immediate {
+                            self.kick_event(&slot.endpoint, "validator", 0)
+                        } else {
+                            self.kick_event(&slot.endpoint, "fail", streak)
+                        });
                         if let Some(evt) = self.check_breaker(&mut inner) {
                             events.push(evt);
                         }
@@ -564,7 +704,7 @@ impl NodePool {
             .slots
             .iter()
             .map(|s| crate::model::CdnNodeInfo {
-                ip: s.ip.map_or_else(|| "SYS".to_string(), |ip| ip.to_string()),
+                ip: s.endpoint.display(),
                 origin: s.origin.clone(),
                 bytes: s.bytes_done.min(i64::MAX as u64) as i64,
                 ewma_bps: s.ewma_bps as i64,
@@ -588,12 +728,12 @@ impl NodePool {
         let kicked = inner
             .slots
             .iter()
-            .filter(|s| s.ip.is_some() && s.kicked)
+            .filter(|s| s.endpoint.is_failover() && s.kicked)
             .count();
         let alive = inner
             .slots
             .iter()
-            .filter(|s| s.ip.is_some() && !s.kicked)
+            .filter(|s| s.endpoint.is_failover() && !s.kicked)
             .count();
         if kicked > alive {
             inner.no_aggregate_recorded = true;
@@ -620,7 +760,9 @@ impl NodePool {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use super::{DEFAULT_EWMA_BPS, KICK_STREAK, MIN_SAMPLE_BYTES, NodePool, NodeSlot};
+    use super::{
+        DEFAULT_EWMA_BPS, KICK_STREAK, MIN_SAMPLE_BYTES, NodeEndpoint, NodePool, NodeSlot,
+    };
     use crate::downloader::DownloadError;
     use std::net::{IpAddr, Ipv4Addr};
     use std::sync::Arc;
@@ -639,7 +781,7 @@ mod tests {
             let mut inner = pool.inner.lock().unwrap();
             for &ip in ips {
                 inner.slots.push(NodeSlot {
-                    ip: Some(ip),
+                    endpoint: NodeEndpoint::PinnedIp(ip),
                     client: Some(client.clone()),
                     ewma_bps: DEFAULT_EWMA_BPS,
                     fail_streak: 0,
@@ -653,13 +795,35 @@ mod tests {
         pool
     }
 
-    /// 获取一个钉定节点的租约。等分数时 tie-break 恒选低编号（SYS），
-    /// 故需持有沿途的 SYS/其他租约占满其并发额度，逼出钉定节点。
-    fn pinned_lease(pool: &Arc<NodePool>) -> (super::NodeLease, Vec<super::NodeLease>) {
+    /// 同款直接构造镜像槽位（不经懒建，零网络）。
+    fn test_mirror_pool(urls: &[&str]) -> Arc<NodePool> {
+        let client = reqwest::Client::new();
+        let pool = NodePool::single(client.clone());
+        {
+            let mut inner = pool.inner.lock().unwrap();
+            for url in urls {
+                inner.slots.push(NodeSlot {
+                    endpoint: NodeEndpoint::Mirror(url.to_string()),
+                    client: Some(client.clone()),
+                    ewma_bps: DEFAULT_EWMA_BPS,
+                    fail_streak: 0,
+                    kicked: false,
+                    outstanding: 0,
+                    origin: "mirror".to_string(),
+                    bytes_done: 0,
+                });
+            }
+        }
+        pool
+    }
+
+    /// 获取一个非兜底节点的租约。等分数时 tie-break 恒选低编号（SYS），
+    /// 故需持有沿途的 SYS/其他租约占满其并发额度，逼出非兜底节点。
+    fn failover_lease(pool: &Arc<NodePool>) -> (super::NodeLease, Vec<super::NodeLease>) {
         let mut held = Vec::new();
         loop {
             let l = pool.lease();
-            if l.is_pinned() {
+            if l.is_failover() {
                 return (l, held);
             }
             held.push(l);
@@ -672,8 +836,8 @@ mod tests {
         assert!(!pool.is_multi());
         let l1 = pool.lease();
         let l2 = pool.lease();
-        assert!(!l1.is_pinned());
-        assert!(!l2.is_pinned());
+        assert!(!l1.is_failover());
+        assert!(!l2.is_failover());
         assert_eq!(l1.describe(), "SYS");
     }
 
@@ -707,15 +871,15 @@ mod tests {
         let pool = test_pool(&[ip(2)]);
         let err = DownloadError::Other("segment 0 stalled: no data".to_string());
         for _ in 0..KICK_STREAK {
-            let (lease, _held) = pinned_lease(&pool);
+            let (lease, _held) = failover_lease(&pool);
             pool.report(&lease, 0, Duration::from_secs(1), Err(&err));
         }
         // 连续失败后钉定节点被踢：此后所有租约都是 SYS。
-        assert_eq!(pool.alive_pinned(), 0);
+        assert_eq!(pool.alive_failover(), 0);
         let mut held = Vec::new();
         for _ in 0..4 {
             let l = pool.lease();
-            assert!(!l.is_pinned());
+            assert!(!l.is_failover());
             held.push(l);
         }
     }
@@ -723,16 +887,16 @@ mod tests {
     #[test]
     fn switch_to_client_retires_pinned_and_serves_new_client() {
         let pool = test_pool(&[ip(2), ip(3)]);
-        assert_eq!(pool.alive_pinned(), 2);
+        assert_eq!(pool.alive_failover(), 2);
         // 在途租约不受影响地持有旧 client（切换只影响后续 lease）。
-        let (old_lease, _held) = pinned_lease(&pool);
+        let (old_lease, _held) = failover_lease(&pool);
         pool.switch_to_client(reqwest::Client::new());
         // 钉定节点全部退役，此后任意并发度的租约都只落 SYS（代理 client）。
-        assert_eq!(pool.alive_pinned(), 0);
+        assert_eq!(pool.alive_failover(), 0);
         let mut held = Vec::new();
         for _ in 0..4 {
             let l = pool.lease();
-            assert!(!l.is_pinned(), "切换后新租约不得再命中钉定节点");
+            assert!(!l.is_failover(), "切换后新租约不得再命中钉定节点");
             held.push(l);
         }
         // 主动切换不得走熔断记录路径（kick 是节点故障语义，切换不是）。
@@ -744,17 +908,21 @@ mod tests {
     fn version_changed_kicks_immediately() {
         let pool = test_pool(&[ip(2), ip(3), ip(4)]);
         // 找到一个钉定租约并报 validator 不一致。
-        let (lease, _held) = pinned_lease(&pool);
+        let (lease, _held) = failover_lease(&pool);
         let err = DownloadError::VersionChanged("200 OK".to_string());
-        let before = pool.alive_pinned();
+        let before = pool.alive_failover();
         pool.report(&lease, 0, Duration::from_secs(1), Err(&err));
-        assert_eq!(pool.alive_pinned(), before - 1, "validator 不一致立即踢除");
+        assert_eq!(
+            pool.alive_failover(),
+            before - 1,
+            "validator 不一致立即踢除"
+        );
     }
 
     #[test]
     fn ewma_updates_only_on_large_segments() {
         let pool = test_pool(&[ip(2)]);
-        let (lease, _held) = pinned_lease(&pool);
+        let (lease, _held) = failover_lease(&pool);
         let node_id = lease.node_id;
         // 微段：不喂 EWMA。
         pool.report(&lease, MIN_SAMPLE_BYTES - 1, Duration::from_secs(1), Ok(()));
@@ -771,7 +939,7 @@ mod tests {
     #[test]
     fn success_resets_fail_streak() {
         let pool = test_pool(&[ip(2)]);
-        let (lease, _held) = pinned_lease(&pool);
+        let (lease, _held) = failover_lease(&pool);
         let err = DownloadError::Other("segment 1 stalled: no data".to_string());
         pool.report(&lease, 0, Duration::from_secs(1), Err(&err));
         pool.report(&lease, 0, Duration::from_secs(1), Err(&err));

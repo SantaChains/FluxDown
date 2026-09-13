@@ -247,6 +247,7 @@ class ExternalDownloadService {
                     fileName: e.fileName,
                     checksum: e.checksum,
                     audioUrl: e.audioUrl,
+                    mirrorUrls: const [],
                   ),
                 )
                 .toList(),

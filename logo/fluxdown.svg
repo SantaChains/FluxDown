@@ -1,0 +1,91 @@
+<svg width="512" height="512" viewBox="30 30 452 452" role="img" xmlns="http://www.w3.org/2000/svg">
+  <title>Download icon</title>
+  <desc>Dark mode download icon with Liquid Glass effect</desc>
+  <defs>
+    <!-- 卡片外部阴影 -->
+    <filter id="cardShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="16" stdDeviation="32" flood-color="#000000" flood-opacity="0.6"/>
+    </filter>
+
+    <!-- 箭头投影 -->
+    <filter id="arrowShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000000" flood-opacity="0.6"/>
+    </filter>
+
+    <!-- 卡片玻璃渐变 -->
+    <radialGradient id="cardGrad" cx="50%" cy="50%" r="70%" fx="50%" fy="50%">
+      <stop offset="0%" stop-color="#2C2C2E" />
+      <stop offset="100%" stop-color="#1C1C1E" />
+    </radialGradient>
+
+    <!-- 箭头渐变（苹果系统蓝） -->
+    <linearGradient id="arrowGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3A8CFF" />
+      <stop offset="40%" stop-color="#0A84FF" />
+      <stop offset="100%" stop-color="#0055CC" />
+    </linearGradient>
+
+    <!-- 环境光高光渐变 -->
+    <linearGradient id="highlightGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.15" />
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0" />
+    </linearGradient>
+  </defs>
+
+  <!-- 卡片背景容器 -->
+  <rect x="56" y="56" width="400" height="400" rx="88" fill="url(#cardGrad)" filter="url(#cardShadow)"/>
+
+  <!-- 静音微妙描边（玻璃边缘） -->
+  <rect x="56" y="56" width="400" height="400" rx="88" fill="none" stroke="#3A3A3C" stroke-width="1.5"/>
+
+  <!-- 内部高光（营造深度感） -->
+  <rect x="58" y="58" width="396" height="396" rx="86" fill="none" stroke="url(#highlightGrad)" stroke-width="2"/>
+
+  <!-- 下载箭头主体 -->
+  <path d="
+    M 226 133
+    Q 226 121 238 121
+    L 274 121
+    Q 286 121 286 133
+    L 286 298
+    L 331 253
+    Q 340 244 349 253
+    L 363 267
+    Q 372 276 363 285
+    L 265 383
+    Q 256 392 247 383
+    L 149 285
+    Q 140 276 149 267
+    L 163 253
+    Q 172 244 181 253
+    L 226 298
+    Z
+  " fill="url(#arrowGrad)" filter="url(#arrowShadow)"/>
+
+  <!-- 箭头边缘高光（玻璃质感） -->
+  <path d="
+    M 226 133
+    Q 226 121 238 121
+    L 274 121
+    Q 286 121 286 133
+    L 286 298
+    L 331 253
+    Q 340 244 349 253
+    L 363 267
+    Q 372 276 363 285
+    L 265 383
+    Q 256 392 247 383
+    L 149 285
+    Q 140 276 149 267
+    L 163 253
+    Q 172 244 181 253
+    L 226 298
+    Z
+  " fill="none" stroke="#5E9EFF" stroke-width="1.5" opacity="0.6"/>
+
+  <!-- 顶部液态玻璃高光 -->
+  <path d="
+    M 238 123
+    L 274 123
+  " fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" opacity="0.4"/>
+</svg>
